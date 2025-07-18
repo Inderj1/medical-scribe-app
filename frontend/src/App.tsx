@@ -9,6 +9,7 @@ import LoginPage from './components/Auth/LoginPage';
 import SignUpPage from './components/Auth/SignUpPage';
 import ProtectedRoute from './components/Auth/ProtectedRoute';
 import AuthenticatedLayout from './components/Layout/AuthenticatedLayout';
+import { PatientProvider } from './contexts/PatientContext';
 
 // Page imports
 import HomePage from './pages/HomePage';
@@ -39,46 +40,55 @@ function AppContent() {
       )}
 
       {/* Main Content */}
-      <Container>
-        <Routes>
-          {/* Public routes */}
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/sign-up" element={<SignUpPage />} />
-          
-          {/* Protected routes */}
-          <Route path="/" element={
+      <Routes>
+        {/* Public routes */}
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/sign-up" element={<SignUpPage />} />
+        
+        {/* Protected routes - with Container */}
+        <Route path="/" element={
+          <Container>
             <ProtectedRoute>
               <HomePage />
             </ProtectedRoute>
-          } />
-          <Route path="/dashboard" element={
+          </Container>
+        } />
+        <Route path="/dashboard" element={
+          <Container>
             <ProtectedRoute>
               <DashboardPage />
             </ProtectedRoute>
-          } />
-          <Route path="/patient-records" element={
+          </Container>
+        } />
+        <Route path="/patient-records" element={
+          <Container>
             <ProtectedRoute>
               <PatientRecordsPage />
             </ProtectedRoute>
-          } />
-          <Route path="/clinical-notes" element={
-            <ProtectedRoute>
-              <ClinicalNotesPage />
-            </ProtectedRoute>
-          } />
-          <Route path="/ehr" element={
+          </Container>
+        } />
+        {/* Clinical Notes - No Container for full width */}
+        <Route path="/clinical-notes" element={
+          <ProtectedRoute>
+            <ClinicalNotesPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/ehr" element={
+          <Container>
             <ProtectedRoute>
               <EHRIntegrationPage />
             </ProtectedRoute>
-          } />
-          <Route path="/api/auth/epic/callback" element={
+          </Container>
+        } />
+        <Route path="/api/auth/epic/callback" element={
+          <Container>
             <ProtectedRoute>
               <EpicCallback />
             </ProtectedRoute>
-          } />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Container>
+          </Container>
+        } />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </div>
   );
 }
@@ -86,9 +96,11 @@ function AppContent() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <Router>
-        <AppContent />
-      </Router>
+      <PatientProvider>
+        <Router>
+          <AppContent />
+        </Router>
+      </PatientProvider>
     </QueryClientProvider>
   );
 }

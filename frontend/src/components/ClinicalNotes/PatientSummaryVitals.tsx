@@ -3,7 +3,6 @@ import {
   Box,
   Paper,
   Typography,
-  Grid,
   IconButton,
   Tooltip,
   Divider,
@@ -11,7 +10,6 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import PersonIcon from '@mui/icons-material/Person';
-import ErrorIcon from '@mui/icons-material/Error';
 
 interface Vitals {
   blood_pressure: string;
@@ -33,69 +31,10 @@ interface PatientSummaryVitalsProps {
   };
   encounter: {
     chief_complaint: string;
-    referring_physician: string;
+    referring_physician?: string;
   };
   vitals: Vitals;
 }
-
-interface VitalItemProps {
-  label: string;
-  value: string | number;
-  unit?: string;
-  isAbnormal?: boolean;
-}
-
-const VitalItem: React.FC<VitalItemProps> = ({ label, value, unit = '', isAbnormal = false }) => {
-  return (
-    <Box 
-      sx={{ 
-        textAlign: 'center',
-        p: 1.5,
-        bgcolor: '#f8f9fa',
-        borderRadius: 1,
-        position: 'relative',
-        minHeight: 70,
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center'
-      }}
-    >
-      {isAbnormal && (
-        <Box
-          sx={{
-            position: 'absolute',
-            top: 4,
-            right: 4,
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            bgcolor: '#dc3545'
-          }}
-        />
-      )}
-      <Typography 
-        variant="h5" 
-        sx={{ 
-          fontWeight: 600,
-          color: '#212529',
-          lineHeight: 1.2
-        }}
-      >
-        {value}{unit}
-      </Typography>
-      <Typography 
-        variant="caption" 
-        sx={{ 
-          color: 'text.secondary',
-          fontSize: '0.7rem',
-          mt: 0.5
-        }}
-      >
-        {label}
-      </Typography>
-    </Box>
-  );
-};
 
 const PatientSummaryVitals: React.FC<PatientSummaryVitalsProps> = ({ 
   patient, 
@@ -117,12 +56,6 @@ const PatientSummaryVitals: React.FC<PatientSummaryVitalsProps> = ({
   const isRespRateHigh = vitals.respiratory_rate > 20;
   const isBPHigh = parseInt(vitals.blood_pressure.split('/')[0]) > 140;
 
-  // Recent labs data (mock)
-  const recentLabs = [
-    { name: 'Sodium', value: '128 mEq/L', range: '136-145', isLow: true },
-    { name: 'WBC', value: '8.2 K/uL', range: '4.5-11.0', isNormal: true },
-    { name: 'Hemoglobin', value: '13.1 g/dL', range: '13.5-17.5', isLow: true }
-  ];
 
   return (
     <Paper
@@ -171,156 +104,82 @@ const PatientSummaryVitals: React.FC<PatientSummaryVitalsProps> = ({
         </Tooltip>
       </Box>
 
-      <Box sx={{ p: 2 }}>
-        {/* Patient Info Grid */}
-        <Grid container spacing={1.5} sx={{ mb: 2 }}>
-          <Grid item xs={6}>
-            <Box sx={{ bgcolor: '#f8f9fa', p: 1.5, borderRadius: 1 }}>
-              <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
-                CHIEF COMPLAINT
-              </Typography>
-              <Typography variant="body2" sx={{ fontWeight: 500, mt: 0.5 }}>
-                {encounter.chief_complaint}
-              </Typography>
-            </Box>
-          </Grid>
-          <Grid item xs={6}>
-            <Box sx={{ bgcolor: '#f8f9fa', p: 1.5, borderRadius: 1 }}>
-              <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
-                REFERRING PHYSICIAN
-              </Typography>
-              <Typography variant="body2" sx={{ fontWeight: 500, mt: 0.5 }}>
-                {encounter.referring_physician}
-              </Typography>
-            </Box>
-          </Grid>
-          <Grid item xs={6}>
-            <Box sx={{ bgcolor: '#f8f9fa', p: 1.5, borderRadius: 1 }}>
-              <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
-                SMOKING HISTORY
-              </Typography>
-              <Typography variant="body2" sx={{ fontWeight: 500, mt: 0.5 }}>
-                {patient.smoking_history || 'Unknown'}
-              </Typography>
-            </Box>
-          </Grid>
-          <Grid item xs={6}>
-            <Box sx={{ bgcolor: '#f8f9fa', p: 1.5, borderRadius: 1 }}>
-              <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
-                ALLERGIES
-              </Typography>
-              <Typography variant="body2" sx={{ fontWeight: 500, mt: 0.5 }}>
-                {patient.allergies || 'NKDA'}
-              </Typography>
-            </Box>
-          </Grid>
-        </Grid>
-
-        {/* Current Vitals */}
-        <Typography 
-          variant="subtitle2" 
-          sx={{ 
-            fontWeight: 600,
-            color: 'text.secondary',
-            mb: 1.5
-          }}
-        >
-          Current Vitals
-        </Typography>
-        
-        <Grid container spacing={1.5}>
-          <Grid item xs={4}>
-            <VitalItem 
-              label="SpO2" 
-              value={vitals.oxygen_saturation} 
-              unit="%" 
-              isAbnormal={isOxygenLow}
+      <Box sx={{ p: 1.5 }}>
+        {/* Patient Info - Single Row Compact */}
+        <Box sx={{ mb: 1.5, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Chip 
+            label={`CC: ${encounter.chief_complaint}`} 
+            size="small" 
+            sx={{ fontSize: '0.7rem' }}
+          />
+          <Chip 
+            label={`Allergies: ${patient.allergies || 'NKDA'}`} 
+            size="small" 
+            color={patient.allergies && patient.allergies !== 'NKDA' ? 'warning' : 'default'}
+            sx={{ fontSize: '0.7rem' }}
+          />
+          {patient.smoking_history && (
+            <Chip 
+              label={`Smoking: ${patient.smoking_history}`} 
+              size="small" 
+              color="error"
+              sx={{ fontSize: '0.7rem' }}
             />
-          </Grid>
-          <Grid item xs={4}>
-            <VitalItem 
-              label="BP" 
-              value={vitals.blood_pressure} 
-              isAbnormal={isBPHigh}
-            />
-          </Grid>
-          <Grid item xs={4}>
-            <VitalItem 
-              label="Temp" 
-              value={vitals.temperature} 
-              unit="°F" 
-            />
-          </Grid>
-          <Grid item xs={4}>
-            <VitalItem 
-              label="HR" 
-              value={vitals.heart_rate} 
-              unit=" bpm"
-            />
-          </Grid>
-          <Grid item xs={4}>
-            <VitalItem 
-              label="RR" 
-              value={vitals.respiratory_rate} 
-              isAbnormal={isRespRateHigh}
-            />
-          </Grid>
-          <Grid item xs={4}>
-            <VitalItem 
-              label="Pain" 
-              value={vitals.pain_level} 
-            />
-          </Grid>
-        </Grid>
-
-        {/* Recent Labs */}
-        <Typography 
-          variant="subtitle2" 
-          sx={{ 
-            fontWeight: 600,
-            color: 'text.secondary',
-            mt: 3,
-            mb: 1.5
-          }}
-        >
-          Recent Labs
-        </Typography>
-        
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {recentLabs.map((lab, index) => (
-            <Box
-              key={lab.name}
-              sx={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                py: 1,
-                borderBottom: index < recentLabs.length - 1 ? 1 : 0,
-                borderColor: '#f8f9fa'
-              }}
-            >
-              <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                {lab.name}
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography 
-                  variant="body2" 
-                  sx={{ 
-                    fontWeight: 500,
-                    color: lab.isLow || lab.isHigh ? '#dc3545' : 'text.primary'
-                  }}
-                >
-                  {lab.value} {lab.isLow && '↓'} {lab.isHigh && '↑'}
-                </Typography>
-                {(lab.isLow || lab.isHigh) && (
-                  <Tooltip title={`Normal range: ${lab.range}`}>
-                    <ErrorIcon sx={{ fontSize: 16, color: '#dc3545' }} />
-                  </Tooltip>
-                )}
-              </Box>
-            </Box>
-          ))}
+          )}
         </Box>
+
+        {/* Current Vitals - Horizontal Display */}
+        <Box sx={{ 
+          display: 'flex', 
+          gap: 1, 
+          flexWrap: 'wrap',
+          p: 1,
+          bgcolor: '#f8f9fa',
+          borderRadius: 1
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">SpO2:</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 600, color: isOxygenLow ? '#dc3545' : 'inherit' }}>
+              {vitals.oxygen_saturation}%
+            </Typography>
+          </Box>
+          <Divider orientation="vertical" flexItem />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">BP:</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 600, color: isBPHigh ? '#dc3545' : 'inherit' }}>
+              {vitals.blood_pressure}
+            </Typography>
+          </Box>
+          <Divider orientation="vertical" flexItem />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">HR:</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+              {vitals.heart_rate} bpm
+            </Typography>
+          </Box>
+          <Divider orientation="vertical" flexItem />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">Temp:</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+              {vitals.temperature}°F
+            </Typography>
+          </Box>
+          <Divider orientation="vertical" flexItem />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">RR:</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 600, color: isRespRateHigh ? '#dc3545' : 'inherit' }}>
+              {vitals.respiratory_rate}
+            </Typography>
+          </Box>
+          <Divider orientation="vertical" flexItem />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">Pain:</Typography>
+            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+              {vitals.pain_level}
+            </Typography>
+          </Box>
+        </Box>
+
       </Box>
     </Paper>
   );

@@ -3,10 +3,9 @@ import {
   Box,
   Paper,
   Typography,
-  Tabs,
-  Tab,
   Alert,
-  Chip
+  Chip,
+  Divider
 } from '@mui/material';
 import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
 import WarningIcon from '@mui/icons-material/Warning';
@@ -22,20 +21,6 @@ interface Finding {
   status: 'normal' | 'abnormal';
 }
 
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
-
-const TabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => {
-  return (
-    <div hidden={value !== index}>
-      {value === index && <Box sx={{ pt: 2 }}>{children}</Box>}
-    </div>
-  );
-};
-
 const FindingItem: React.FC<Finding> = ({ label, value, status }) => {
   return (
     <Box
@@ -43,22 +28,21 @@ const FindingItem: React.FC<Finding> = ({ label, value, status }) => {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        py: 1.5,
-        borderBottom: 1,
-        borderColor: '#f8f9fa',
-        '&:last-child': {
-          borderBottom: 0
+        py: 0.75,
+        px: 1,
+        '&:hover': {
+          bgcolor: '#f8f9fa'
         }
       }}
     >
-      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
         {label}
       </Typography>
       <Typography 
-        variant="body2" 
+        variant="caption" 
         sx={{ 
-          fontWeight: 500,
-          color: status === 'abnormal' ? '#dc3545' : '#28a745'
+          fontWeight: 600,
+          color: status === 'abnormal' ? '#dc3545' : 'text.primary'
         }}
       >
         {value}
@@ -68,7 +52,6 @@ const FindingItem: React.FC<Finding> = ({ label, value, status }) => {
 };
 
 const PhysicalExamination: React.FC<PhysicalExaminationProps> = ({ encounterId }) => {
-  const [selectedTab, setSelectedTab] = useState(0);
   const [examFindings, setExamFindings] = useState({
     general: [
       { label: 'General Appearance', value: 'Alert and oriented', status: 'normal' as const },
@@ -109,17 +92,6 @@ const PhysicalExamination: React.FC<PhysicalExaminationProps> = ({ encounterId }
     };
   }, [encounterId]);
 
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setSelectedTab(newValue);
-  };
-
-  const tabs = [
-    { label: 'General', key: 'general' },
-    { label: 'Pulmonary', key: 'pulmonary' },
-    { label: 'Cardiac', key: 'cardiac' },
-    { label: 'Imaging', key: 'imaging' }
-  ];
-
   return (
     <Paper
       elevation={2}
@@ -150,103 +122,81 @@ const PhysicalExamination: React.FC<PhysicalExaminationProps> = ({ encounterId }
         </Typography>
       </Box>
 
-      <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', flex: 1 }}>
-        <Tabs
-          value={selectedTab}
-          onChange={handleTabChange}
-          sx={{
-            borderBottom: 1,
-            borderColor: 'divider',
-            '& .MuiTab-root': {
-              minWidth: 'auto',
-              px: 2,
-              py: 1,
-              fontSize: '0.875rem',
-              textTransform: 'none',
-              color: 'text.secondary',
-              '&.Mui-selected': {
-                color: 'primary.main',
-                fontWeight: 500
-              }
-            },
-            '& .MuiTabs-indicator': {
-              height: 2
-            }
-          }}
-        >
-          {tabs.map((tab) => (
-            <Tab key={tab.key} label={tab.label} />
-          ))}
-        </Tabs>
-
-        <Box sx={{ flex: 1, overflow: 'auto' }}>
-          <TabPanel value={selectedTab} index={0}>
+      <Box sx={{ p: 1.5, overflow: 'auto', flex: 1 }}>
+        {/* General Examination */}
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', display: 'block', mb: 0.5 }}>
+            GENERAL
+          </Typography>
+          <Box sx={{ bgcolor: '#f8f9fa', borderRadius: 1 }}>
             {examFindings.general.map((finding) => (
               <FindingItem key={finding.label} {...finding} />
             ))}
-          </TabPanel>
+          </Box>
+        </Box>
 
-          <TabPanel value={selectedTab} index={1}>
+        {/* Pulmonary Examination */}
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', display: 'block', mb: 0.5 }}>
+            PULMONARY
+          </Typography>
+          <Box sx={{ bgcolor: '#f8f9fa', borderRadius: 1 }}>
             {examFindings.pulmonary.map((finding) => (
               <FindingItem key={finding.label} {...finding} />
             ))}
-          </TabPanel>
+          </Box>
+        </Box>
 
-          <TabPanel value={selectedTab} index={2}>
+        {/* Cardiac Examination */}
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary', display: 'block', mb: 0.5 }}>
+            CARDIAC
+          </Typography>
+          <Box sx={{ bgcolor: '#f8f9fa', borderRadius: 1 }}>
             {examFindings.cardiac.map((finding) => (
               <FindingItem key={finding.label} {...finding} />
             ))}
-          </TabPanel>
+          </Box>
+        </Box>
 
-          <TabPanel value={selectedTab} index={3}>
-            <Box>
-              <Box sx={{ 
-                display: 'flex', 
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                mb: 2
-              }}>
-                <Typography 
-                  variant="subtitle2" 
-                  sx={{ 
-                    fontWeight: 600,
-                    color: 'text.secondary'
-                  }}
-                >
-                  Imaging Findings
-                </Typography>
-                {examFindings.imaging.hasCritical && (
-                  <Chip
-                    icon={<WarningIcon />}
-                    label="Critical"
-                    size="small"
-                    color="error"
-                  />
-                )}
-              </Box>
-              
-              {examFindings.imaging.hasCritical ? (
-                <Alert 
-                  severity="error" 
-                  sx={{ 
-                    bgcolor: '#f8d7da',
-                    color: '#721c24',
-                    '& .MuiAlert-icon': {
-                      color: '#721c24'
-                    }
-                  }}
-                >
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    CXR: Suspicious lesion noted in right upper lobe with associated pleural effusion
-                  </Typography>
-                </Alert>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  No imaging findings available
-                </Typography>
-              )}
+        {/* Imaging */}
+        <Box>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+            <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+              IMAGING
+            </Typography>
+            {examFindings.imaging.hasCritical && (
+              <Chip
+                icon={<WarningIcon />}
+                label="Critical"
+                size="small"
+                color="error"
+                sx={{ height: 20, fontSize: '0.7rem' }}
+              />
+            )}
+          </Box>
+          
+          {examFindings.imaging.hasCritical ? (
+            <Alert 
+              severity="error" 
+              sx={{ 
+                py: 0.5,
+                px: 1,
+                '& .MuiAlert-message': { py: 0 },
+                '& .MuiAlert-icon': { py: 0.5 }
+              }}
+            >
+              <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                CXR: Suspicious lesion noted in right upper lobe with associated pleural effusion
+              </Typography>
+            </Alert>
+          ) : (
+            <Box sx={{ bgcolor: '#f8f9fa', borderRadius: 1, p: 1 }}>
+              <Typography variant="caption" color="text.secondary">
+                No imaging findings available
+              </Typography>
             </Box>
-          </TabPanel>
+          )}
         </Box>
       </Box>
     </Paper>

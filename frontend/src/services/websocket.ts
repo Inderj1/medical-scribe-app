@@ -73,7 +73,7 @@ class WebSocketService {
       this.socket.on('connect', () => {
         console.log('WebSocket connected');
         this.reconnectAttempts = 0;
-        this.emit('connection:status', {
+        this.emitLocal('connection:status', {
           type: 'connection:status',
           status: 'connected',
           timestamp: new Date().toISOString()
@@ -83,7 +83,7 @@ class WebSocketService {
       
       this.socket.on('disconnect', (reason) => {
         console.log('WebSocket disconnected:', reason);
-        this.emit('connection:status', {
+        this.emitLocal('connection:status', {
           type: 'connection:status',
           status: 'disconnected',
           timestamp: new Date().toISOString()
@@ -92,7 +92,7 @@ class WebSocketService {
       
       this.socket.on('error', (error) => {
         console.error('WebSocket error:', error);
-        this.emit('connection:status', {
+        this.emitLocal('connection:status', {
           type: 'connection:status',
           status: 'error',
           timestamp: new Date().toISOString()
@@ -107,19 +107,19 @@ class WebSocketService {
       
       // Specific event handlers
       this.socket.on('transcription:partial', (data: TranscriptionUpdate) => {
-        this.emit('transcription:partial', data);
+        this.emitLocal('transcription:partial', data);
       });
       
       this.socket.on('transcription:final', (data: TranscriptionUpdate) => {
-        this.emit('transcription:final', data);
+        this.emitLocal('transcription:final', data);
       });
       
       this.socket.on('notes:update', (data: ClinicalNotesUpdate) => {
-        this.emit('notes:update', data);
+        this.emitLocal('notes:update', data);
       });
       
       this.socket.on('vitals:update', (data: VitalsUpdate) => {
-        this.emit('vitals:update', data);
+        this.emitLocal('vitals:update', data);
       });
     });
   }
@@ -213,7 +213,7 @@ class WebSocketService {
   }
   
   private handleMessage(data: WebSocketMessage): void {
-    this.emit(data.type, data);
+    this.emitLocal(data.type, data);
   }
   
   on(event: string, callback: Function): void {
@@ -229,7 +229,7 @@ class WebSocketService {
     }
   }
   
-  private emit(event: string, data: any): void {
+  private emitLocal(event: string, data: any): void {
     if (this.listeners.has(event)) {
       this.listeners.get(event)!.forEach(callback => {
         callback(data);
@@ -239,6 +239,14 @@ class WebSocketService {
   
   isConnected(): boolean {
     return this.socket?.connected || false;
+  }
+  
+  emit(event: string, data: any): void {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit(event, data);
+    } else {
+      console.warn(`Cannot emit ${event}: WebSocket not connected`);
+    }
   }
 }
 

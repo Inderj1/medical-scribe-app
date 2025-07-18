@@ -21,7 +21,7 @@ interface PatientHeaderProps {
     age?: number;
   };
   encounter: {
-    encounter_date: Date;
+    encounter_date: Date | string;
     risk_factors?: string[];
   };
 }
@@ -122,7 +122,7 @@ const PatientHeader: React.FC<PatientHeaderProps> = ({ patient, encounter }) => 
           Encounter:
         </Typography>
         <Typography variant="body2" sx={{ fontWeight: 500 }}>
-          {format(encounter.encounter_date, 'MMM dd, yyyy h:mm a')}
+          {format(new Date(encounter.encounter_date), 'MMM dd, yyyy h:mm a')}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 2 }}>
           <FiberManualRecordIcon 

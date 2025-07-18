@@ -4,14 +4,19 @@ import {
   Paper,
   Button,
   Typography,
-  CircularProgress
+  CircularProgress,
+  IconButton,
+  Tooltip
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PrintIcon from '@mui/icons-material/Print';
 import AddIcon from '@mui/icons-material/Add';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import MicIcon from '@mui/icons-material/Mic';
+import MicOffIcon from '@mui/icons-material/MicOff';
 import { formatDistanceToNow } from 'date-fns';
+import webSocketService from '../../services/websocket';
 
 interface ActionBarProps {
   onSaveDraft: () => void;
@@ -28,6 +33,15 @@ const ActionBar: React.FC<ActionBarProps> = ({
 }) => {
   const [isSaving, setIsSaving] = React.useState(false);
   const [isSigningOff, setIsSigningOff] = React.useState(false);
+  const [isRecording, setIsRecording] = React.useState(false);
+  const [mediaRecorder, setMediaRecorder] = React.useState<MediaRecorder | null>(null);
+  const [audioChunks, setAudioChunks] = React.useState<Blob[]>([]);
+  const [isWebSocketConnected, setIsWebSocketConnected] = React.useState(false);
+
+  React.useEffect(() => {
+    // Check WebSocket connection status
+    setIsWebSocketConnected(webSocketService.isConnected());
+  }, []);
 
   const handleSaveDraft = async () => {
     setIsSaving(true);
@@ -60,6 +74,77 @@ const ActionBar: React.FC<ActionBarProps> = ({
 
   const getTimeSinceLastSave = () => {
     return formatDistanceToNow(lastSaveTime, { addSuffix: true });
+  };
+
+  const startRecording = async () => {
+    try {
+      // Check if WebSocket is connected
+      if (!webSocketService.isConnected()) {
+        console.log('WebSocket not connected, skipping connection for now');
+        // For now, we'll just record locally without streaming
+        // In production, you would connect the WebSocket here
+        // await webSocketService.connect(authToken);
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          // Only send if WebSocket is connected
+          if (webSocketService.isConnected()) {
+            event.data.arrayBuffer().then(buffer => {
+              try {
+                webSocketService.sendAudioChunk(buffer);
+              } catch (error) {
+                console.error('Error sending audio chunk:', error);
+              }
+            });
+          } else {
+            // Store locally for now
+            console.log('Storing audio chunk locally, WebSocket not connected');
+          }
+          setAudioChunks(prev => [...prev, event.data]);
+        }
+      };
+
+      recorder.onstart = () => {
+        console.log('Recording started');
+        setIsRecording(true);
+      };
+
+      recorder.onstop = () => {
+        console.log('Recording stopped');
+        setIsRecording(false);
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      // Start recording with 100ms chunks for real-time streaming
+      recorder.start(100);
+      setMediaRecorder(recorder);
+    } catch (error) {
+      console.error('Error accessing microphone:', error);
+      alert('Unable to access microphone. Please check permissions.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      setMediaRecorder(null);
+      setAudioChunks([]);
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
   };
 
   return (
@@ -147,6 +232,30 @@ const ActionBar: React.FC<ActionBarProps> = ({
       </Box>
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        <Tooltip 
+          title={
+            !isWebSocketConnected 
+              ? "Recording locally (WebSocket not connected)" 
+              : isRecording 
+                ? "Stop recording" 
+                : "Start recording"
+          }
+        >
+          <IconButton
+            onClick={toggleRecording}
+            sx={{
+              bgcolor: isRecording ? '#dc3545' : '#28a745',
+              color: 'white',
+              '&:hover': {
+                bgcolor: isRecording ? '#c82333' : '#218838'
+              },
+              animation: isRecording ? 'pulse 1s ease-in-out infinite' : 'none'
+            }}
+          >
+            {isRecording ? <MicOffIcon /> : <MicIcon />}
+          </IconButton>
+        </Tooltip>
+
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           <Typography variant="body2" color="text.secondary">
             Last saved:
@@ -164,18 +273,19 @@ const ActionBar: React.FC<ActionBarProps> = ({
             <FiberManualRecordIcon 
               sx={{ 
                 fontSize: 12, 
-                color: '#28a745',
-                animation: 'pulse 2s ease-in-out infinite'
+                color: isRecording ? '#dc3545' : '#6c757d',
+                animation: isRecording ? 'pulse 1s ease-in-out infinite' : 'none'
               }} 
             />
             <Typography 
               variant="body2" 
               sx={{ 
-                color: '#28a745', 
+                color: isRecording ? '#dc3545' : '#6c757d', 
                 fontWeight: 500
               }}
             >
-              Active
+              {isRecording ? 'Recording' : 'Inactive'}
+              {!isWebSocketConnected && ' (Local Only)'}
             </Typography>
           </Box>
         </Box>

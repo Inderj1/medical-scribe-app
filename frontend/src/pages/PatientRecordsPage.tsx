@@ -38,8 +38,11 @@ import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
 import DescriptionIcon from '@mui/icons-material/Description';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import CloseIcon from '@mui/icons-material/Close';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import { ehrApi } from '../services/ehr';
 import { format } from 'date-fns';
+import { useNavigate } from 'react-router-dom';
+import { usePatient } from '../contexts/PatientContext';
 
 interface Patient {
   ehr_id: string;
@@ -87,6 +90,9 @@ function TabPanel(props: TabPanelProps) {
 }
 
 function PatientRecordsPage() {
+  const navigate = useNavigate();
+  const { setSelectedPatient: setContextPatient, setSelectedEncounter: setContextEncounter, setRecentVitals } = usePatient();
+  
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [encounters, setEncounters] = useState<Encounter[]>([]);
@@ -207,6 +213,34 @@ function PatientRecordsPage() {
     }
   };
 
+  const handleStartClinicalNote = (patient: Patient) => {
+    // Calculate age from date of birth
+    const birthDate = new Date(patient.date_of_birth);
+    const today = new Date();
+    const age = today.getFullYear() - birthDate.getFullYear();
+    
+    // Set patient data in context
+    setContextPatient({
+      ...patient,
+      age,
+      allergies: 'NKDA', // Default value, should be fetched from patient record
+      smoking_history: 'Unknown' // Default value, should be fetched from patient record
+    });
+
+    // Set most recent encounter and vitals if available
+    if (encounters.length > 0) {
+      const latestEncounter = encounters[0];
+      setContextEncounter(latestEncounter);
+      
+      if (latestEncounter.vitals) {
+        setRecentVitals(latestEncounter.vitals);
+      }
+    }
+
+    // Navigate to clinical notes page
+    navigate('/clinical-notes');
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h4" gutterBottom sx={{ mb: 4 }}>
@@ -307,6 +341,39 @@ function PatientRecordsPage() {
                       </Typography>
                     )}
                   </Box>
+                  
+                  <Box display="flex" gap={1} mt={2}>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      startIcon={<NoteAddIcon />}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleStartClinicalNote(patient);
+                      }}
+                      sx={{ 
+                        flex: 1,
+                        textTransform: 'none',
+                        bgcolor: '#28a745',
+                        '&:hover': {
+                          bgcolor: '#218838'
+                        }
+                      }}
+                    >
+                      Start Clinical Note
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePatientSelect(patient);
+                      }}
+                      sx={{ textTransform: 'none' }}
+                    >
+                      View Details
+                    </Button>
+                  </Box>
                 </CardContent>
               </Card>
             </Grid>
@@ -347,9 +414,28 @@ function PatientRecordsPage() {
                     </Typography>
                   </Box>
                 </Box>
-                <IconButton onClick={() => setDialogOpen(false)}>
-                  <CloseIcon />
-                </IconButton>
+                <Box display="flex" alignItems="center" gap={2}>
+                  <Button
+                    variant="contained"
+                    startIcon={<NoteAddIcon />}
+                    onClick={() => {
+                      handleStartClinicalNote(selectedPatient);
+                      setDialogOpen(false);
+                    }}
+                    sx={{ 
+                      textTransform: 'none',
+                      bgcolor: '#28a745',
+                      '&:hover': {
+                        bgcolor: '#218838'
+                      }
+                    }}
+                  >
+                    Start Clinical Note
+                  </Button>
+                  <IconButton onClick={() => setDialogOpen(false)}>
+                    <CloseIcon />
+                  </IconButton>
+                </Box>
               </Box>
             </DialogTitle>
             

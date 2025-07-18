@@ -5,7 +5,6 @@ import PatientHeader from '../components/ClinicalNotes/PatientHeader';
 import PatientSummaryVitals from '../components/ClinicalNotes/PatientSummaryVitals';
 import PhysicalExamination from '../components/ClinicalNotes/PhysicalExamination';
 import ClinicalDocumentation from '../components/ClinicalNotes/ClinicalDocumentation';
-import LiveTranscription from '../components/ClinicalNotes/LiveTranscription';
 import ActionBar from '../components/ClinicalNotes/ActionBar';
 import webSocketService from '../services/websocket';
 import { usePatient } from '../contexts/PatientContext';
@@ -140,18 +139,6 @@ function ClinicalNotesPage() {
     console.log('Signing encounter...');
   };
 
-  const handleAddToSection = (section: string, content: string) => {
-    // This function will be called when user adds transcription to a section
-    console.log(`Adding to section ${section}:`, content);
-    
-    // Send update via WebSocket
-    webSocketService.emit('notes:update', {
-      type: 'notes:update',
-      section: section,
-      content: { text: content, action: 'append' }
-    });
-  };
-
   return (
     <Box sx={{ 
       display: 'flex', 
@@ -184,27 +171,33 @@ function ClinicalNotesPage() {
         encounter={encounter}
       />
       
-      {/* Main Content Grid - Full Width */}
+      {/* Main Content Grid */}
       <Box sx={{ 
         flex: 1, 
         overflow: 'hidden',
-        px: 2,
-        py: 1
+        p: 2
       }}>
         <Grid container spacing={2} sx={{ height: '100%' }}>
-          {/* Left Side: Live Transcription */}
-          <Grid item xs={12} md={4} sx={{ 
+          {/* Left Column: Patient Summary & Physical Examination */}
+          <Grid item xs={12} md={6} sx={{ 
+            display: 'flex', 
+            flexDirection: 'column', 
+            gap: 2,
             height: '100%',
-            overflow: 'hidden'
+            overflow: 'auto'
           }}>
-            <LiveTranscription 
+            <PatientSummaryVitals 
+              patient={patient}
+              encounter={encounter}
+              vitals={vitals}
+            />
+            <PhysicalExamination 
               encounterId={encounter.id}
-              onAddToSection={handleAddToSection}
             />
           </Grid>
 
-          {/* Center: Clinical Documentation */}
-          <Grid item xs={12} md={5} sx={{ 
+          {/* Right Column: Clinical Documentation */}
+          <Grid item xs={12} md={6} sx={{ 
             height: '100%',
             overflow: 'hidden'
           }}>
@@ -212,29 +205,6 @@ function ClinicalNotesPage() {
               encounterId={encounter.id}
               patientId={patient.ehr_id || patient.id || '123'}
             />
-          </Grid>
-
-          {/* Right Side: Patient Info Sidebar - Vertically Stacked */}
-          <Grid item xs={12} md={3} sx={{ 
-            height: '100%',
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2
-          }}>
-            {/* Patient Summary - Auto-sized */}
-            <PatientSummaryVitals 
-              patient={patient}
-              encounter={encounter}
-              vitals={vitals}
-            />
-            
-            {/* Physical Examination - Takes remaining space */}
-            <Box sx={{ flex: 1, minHeight: 0 }}>
-              <PhysicalExamination 
-                encounterId={encounter.id}
-              />
-            </Box>
           </Grid>
         </Grid>
       </Box>
