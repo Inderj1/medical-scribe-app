@@ -1,0 +1,31 @@
+FROM node:18-alpine
+
+# Create app directory
+WORKDIR /app
+
+# Install app dependencies
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy app source
+COPY . .
+
+# Create cache directories with full permissions
+RUN mkdir -p node_modules/.cache && \
+    chmod -R 777 node_modules/.cache
+
+# Set environment to development
+ENV NODE_ENV=development
+
+# Disable ESLint cache to avoid permission issues
+ENV EXTEND_ESLINT=true
+ENV ESLINT_NO_DEV_ERRORS=true
+ENV DISABLE_ESLINT_PLUGIN=true
+
+# Expose port
+EXPOSE 3000
+
+# Start the development server
+CMD ["npm", "start"]
