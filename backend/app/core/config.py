@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "https://localhost:3000"]
     ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1"]
     
+    # OpenEHR Configuration
+    OPENEHR_API_URL: Optional[str] = None
+    
     # Epic Configuration
     EPIC_CLIENT_ID: Optional[str] = None
     EPIC_CLIENT_SECRET: Optional[str] = None

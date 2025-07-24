@@ -97,3 +97,40 @@ async def logout(
 ):
     """Logout user (client should discard token)"""
     return {"message": "Successfully logged out"}
+
+
+@router.post("/login", response_model=Token)
+async def login_json(
+    credentials: dict,
+    db: Session = Depends(get_db)
+):
+    """Login with JSON credentials"""
+    username = credentials.get("username") or credentials.get("email")
+    password = credentials.get("password")
+    
+    if not username or not password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username/email and password are required"
+        )
+    
+    user = authenticate_user(db, username, password)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username},
+        expires_delta=access_token_expires
+    )
+    
+    # Update last login
+    user.last_login = datetime.utcnow()
+    db.commit()
+    
+    return {"access_token": access_token, "token_type": "bearer"}

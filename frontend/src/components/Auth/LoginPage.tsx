@@ -14,9 +14,17 @@ const LoginPage: React.FC = () => {
         }}
       >
         <Paper elevation={3} sx={{ padding: 4, width: '100%' }}>
-          <Typography component="h1" variant="h4" align="center" gutterBottom>
-            Medical Scribe System
-          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'center', mb: 4 }}>
+            <img 
+              src="/2.png" 
+              alt="Medical Scribe Logo" 
+              style={{ 
+                height: '100px',
+                width: 'auto',
+                objectFit: 'contain'
+              }} 
+            />
+          </Box>
           <Typography variant="body1" align="center" color="text.secondary" sx={{ mb: 3 }}>
             Sign in to access your medical scribe dashboard
           </Typography>

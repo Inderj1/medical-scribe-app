@@ -2,7 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 // Use ngrok URL for EHRBASE medical records API
-const LOCAL_EHRBASE_URL = 'https://859574eed9a9.ngrok.app/api';
+const LOCAL_EHRBASE_URL = 'https://0ad9841a0c70.ngrok.app/api';
 
 interface Patient {
   ehr_id: string;

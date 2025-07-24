@@ -13,7 +13,7 @@ class AudioProcessor:
     def __init__(self, redis_client):
         self.redis = redis_client
         self.chunk_size = 4096  # bytes
-        self.buffer_duration = 5  # seconds before processing
+        self.buffer_duration = 3  # seconds before processing (reduced from 5)
         self.sample_rate = 16000  # 16kHz for Whisper
         
     async def add_chunk(self, session_id: str, audio_chunk: str) -> None:
@@ -22,17 +22,29 @@ class AudioProcessor:
             # Decode base64 audio
             audio_data = base64.b64decode(audio_chunk)
             
-            # Add to Redis list
+            # Store the latest chunk, replacing the previous one
+            # Since webm chunks can't be concatenated, we'll use the most recent complete chunk
             key = f"audio:buffer:{session_id}"
-            await self.redis.rpush(key, audio_data)
+            last_chunk_key = f"audio:last_chunk:{session_id}"
+            
+            # Store this chunk as the latest complete chunk
+            self.redis.set(last_chunk_key, audio_data, ex=3600)
+            
+            # Also add to buffer list for size tracking
+            self.redis.rpush(key, audio_data)
+            
+            # Keep only last 5 chunks in buffer list (for size calculation)
+            list_len = self.redis.llen(key)
+            if list_len > 5:
+                self.redis.ltrim(key, -5, -1)
             
             # Set expiration (1 hour)
-            await self.redis.expire(key, 3600)
+            self.redis.expire(key, 3600)
             
             # Update last activity
-            await self.redis.set(f"audio:activity:{session_id}", 
-                               datetime.utcnow().isoformat(), 
-                               ex=3600)
+            self.redis.set(f"audio:activity:{session_id}", 
+                          datetime.utcnow().isoformat(), 
+                          ex=3600)
                                
         except Exception as e:
             logger.error(f"Error adding audio chunk: {e}")
@@ -43,13 +55,13 @@ class AudioProcessor:
         try:
             # Get buffer size
             key = f"audio:buffer:{session_id}"
-            buffer_size = await self.redis.llen(key)
+            buffer_size = self.redis.llen(key)
             
-            # Calculate approximate duration based on chunk count
-            # Assuming 16kHz mono audio, 2 bytes per sample
-            bytes_per_second = self.sample_rate * 2
-            chunks_per_second = bytes_per_second / self.chunk_size
-            duration_seconds = buffer_size / chunks_per_second
+            # For webm/opus format, we get chunks every 100ms
+            # So 10 chunks = 1 second
+            duration_seconds = buffer_size / 10.0
+            
+            logger.info(f"Buffer size: {buffer_size} chunks, estimated duration: {duration_seconds:.2f}s (need {self.buffer_duration}s)")
             
             return duration_seconds >= self.buffer_duration
             
@@ -58,20 +70,23 @@ class AudioProcessor:
             return False
             
     async def get_audio_buffer(self, session_id: str) -> bytes:
-        """Get and combine all audio chunks from buffer"""
+        """Get the last complete audio chunk"""
         try:
-            key = f"audio:buffer:{session_id}"
+            # Get the last complete chunk (webm chunks are self-contained)
+            last_chunk_key = f"audio:last_chunk:{session_id}"
+            last_chunk = self.redis.get(last_chunk_key)
             
-            # Get all chunks
-            chunks = await self.redis.lrange(key, 0, -1)
+            if not last_chunk:
+                # Fallback to getting the last chunk from the buffer list
+                key = f"audio:buffer:{session_id}"
+                chunks = self.redis.lrange(key, -1, -1)
+                if chunks:
+                    last_chunk = chunks[0]
+                else:
+                    return b""
             
-            if not chunks:
-                return b""
-                
-            # Combine chunks
-            audio_buffer = b"".join(chunks)
-            
-            return audio_buffer
+            logger.info(f"Retrieved audio chunk of {len(last_chunk)} bytes for transcription")
+            return last_chunk
             
         except Exception as e:
             logger.error(f"Error getting audio buffer: {e}")
@@ -81,7 +96,9 @@ class AudioProcessor:
         """Clear processed audio buffer"""
         try:
             key = f"audio:buffer:{session_id}"
-            await self.redis.delete(key)
+            last_chunk_key = f"audio:last_chunk:{session_id}"
+            self.redis.delete(key)
+            self.redis.delete(last_chunk_key)
             
         except Exception as e:
             logger.error(f"Error clearing buffer: {e}")
@@ -91,11 +108,12 @@ class AudioProcessor:
         try:
             keys = [
                 f"audio:buffer:{session_id}",
-                f"audio:activity:{session_id}"
+                f"audio:activity:{session_id}",
+                f"audio:last_chunk:{session_id}"
             ]
             
             for key in keys:
-                await self.redis.delete(key)
+                self.redis.delete(key)
                 
         except Exception as e:
             logger.error(f"Error cleaning up session: {e}")
@@ -103,39 +121,26 @@ class AudioProcessor:
     def process_audio_for_whisper(self, audio_data: bytes) -> io.BytesIO:
         """Process audio data for Whisper API"""
         try:
-            # Convert to numpy array
-            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            # Log audio data info
+            logger.info(f"Processing audio for Whisper: {len(audio_data)} bytes")
             
-            # Normalize audio
-            audio_normalized = audio_array.astype(np.float32) / 32768.0
+            # Check if we have valid audio data
+            if not audio_data or len(audio_data) == 0:
+                raise ValueError("Empty audio data received")
             
-            # Create WAV file in memory
-            wav_buffer = io.BytesIO()
+            # The audio data is already in webm/opus format from the browser
+            # Whisper API accepts webm format directly
+            audio_buffer = io.BytesIO(audio_data)
+            audio_buffer.name = "audio.webm"  # Whisper needs a filename with extension
+            audio_buffer.seek(0)
             
-            # Simple WAV header for 16kHz mono audio
-            sample_rate = 16000
-            num_channels = 1
-            bits_per_sample = 16
+            # Verify the buffer is readable
+            test_read = audio_buffer.read(4)
+            audio_buffer.seek(0)
+            logger.debug(f"Audio buffer header (first 4 bytes): {test_read.hex() if test_read else 'empty'}")
             
-            # Write WAV header
-            wav_buffer.write(b'RIFF')
-            wav_buffer.write((36 + len(audio_data)).to_bytes(4, 'little'))
-            wav_buffer.write(b'WAVE')
-            wav_buffer.write(b'fmt ')
-            wav_buffer.write((16).to_bytes(4, 'little'))
-            wav_buffer.write((1).to_bytes(2, 'little'))  # PCM
-            wav_buffer.write((num_channels).to_bytes(2, 'little'))
-            wav_buffer.write((sample_rate).to_bytes(4, 'little'))
-            wav_buffer.write((sample_rate * num_channels * bits_per_sample // 8).to_bytes(4, 'little'))
-            wav_buffer.write((num_channels * bits_per_sample // 8).to_bytes(2, 'little'))
-            wav_buffer.write((bits_per_sample).to_bytes(2, 'little'))
-            wav_buffer.write(b'data')
-            wav_buffer.write(len(audio_data).to_bytes(4, 'little'))
-            wav_buffer.write(audio_data)
-            
-            wav_buffer.seek(0)
-            return wav_buffer
+            return audio_buffer
             
         except Exception as e:
-            logger.error(f"Error processing audio for Whisper: {e}")
+            logger.error(f"Error processing audio for Whisper: {type(e).__name__}: {str(e)}")
             raise

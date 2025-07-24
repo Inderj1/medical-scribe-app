@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { Container } from '@mui/material';
+import { Container, ThemeProvider } from '@mui/material';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuth } from '@clerk/clerk-react';
 import EpicLaunch from './components/Auth/EpicLaunch';
@@ -10,6 +10,7 @@ import SignUpPage from './components/Auth/SignUpPage';
 import ProtectedRoute from './components/Auth/ProtectedRoute';
 import AuthenticatedLayout from './components/Layout/AuthenticatedLayout';
 import { PatientProvider } from './contexts/PatientContext';
+import theme from './theme/theme';
 
 // Page imports
 import HomePage from './pages/HomePage';
@@ -95,13 +96,15 @@ function AppContent() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <PatientProvider>
-        <Router>
-          <AppContent />
-        </Router>
-      </PatientProvider>
-    </QueryClientProvider>
+    <ThemeProvider theme={theme}>
+      <QueryClientProvider client={queryClient}>
+        <PatientProvider>
+          <Router>
+            <AppContent />
+          </Router>
+        </PatientProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 

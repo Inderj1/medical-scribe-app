@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -102,26 +102,47 @@ function PatientRecordsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [tabValue, setTabValue] = useState(0);
   const [selectedEncounter, setSelectedEncounter] = useState<Encounter | null>(null);
+  const initialLoadRef = useRef(false);
 
   useEffect(() => {
-    searchPatients();
+    // Prevent duplicate calls in React StrictMode or on hot reload
+    console.log('PatientRecordsPage useEffect triggered, initialLoadRef.current:', initialLoadRef.current);
+    if (!initialLoadRef.current) {
+      initialLoadRef.current = true;
+      console.log('Starting initial patient search...');
+      searchPatients();
+    } else {
+      console.log('Skipping duplicate patient search call');
+    }
   }, []);
 
   const searchPatients = async (searchQuery?: string) => {
+    console.log(`searchPatients called with searchQuery: "${searchQuery}", loading: ${loading}`);
+    
+    // Prevent multiple simultaneous calls
+    if (loading) {
+      console.log('Search already in progress, skipping...');
+      return;
+    }
+
+    console.log('Starting patient search...');
     setLoading(true);
     setError(null);
     try {
       const searchParams = searchQuery ? { firstName: searchQuery } : {};
+      console.log('Calling ehrApi.searchPatients with params:', searchParams);
       const results = await ehrApi.searchPatients({
         organizationId: 'ehrbase',
         ...searchParams
       });
+      console.log(`Patient search completed, found ${results.length} patients`);
       setPatients(results);
     } catch (error) {
       console.error('Failed to search patients:', error);
       setError('Failed to load patients. Please try again.');
     } finally {
       setLoading(false);
+      console.log('Patient search finished');
     }
   };
 

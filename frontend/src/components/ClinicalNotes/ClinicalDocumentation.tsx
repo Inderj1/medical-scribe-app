@@ -10,15 +10,23 @@ import {
   Checkbox,
   FormControlLabel,
   LinearProgress,
-  Fade
+  Fade,
+  Collapse,
+  IconButton,
+  Tooltip
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import AddIcon from '@mui/icons-material/Add';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import SettingsIcon from '@mui/icons-material/Settings';
 import webSocketService from '../../services/websocket';
+import NoteSettings, { NoteFormat } from './NoteSettings';
 
 interface ClinicalDocumentationProps {
   encounterId: string;
   patientId: string;
+  onAddToSection?: (section: string, content: string, transcriptionId?: string) => void;
 }
 
 interface Symptom {
@@ -50,11 +58,16 @@ const severityColors = {
 
 const ClinicalDocumentation: React.FC<ClinicalDocumentationProps> = ({ 
   encounterId, 
-  patientId 
+  patientId,
+  onAddToSection 
 }) => {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [currentTranscription, setCurrentTranscription] = useState('');
   const [transcriptionConfidence, setTranscriptionConfidence] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [noteFormat, setNoteFormat] = useState<NoteFormat>(
+    (localStorage.getItem('noteFormat') as NoteFormat) || 'long'
+  );
   
   // Clinical Notes State
   const [presentIllness, setPresentIllness] = useState<Symptom[]>([
@@ -90,6 +103,20 @@ const ClinicalDocumentation: React.FC<ClinicalDocumentationProps> = ({
     { id: '7', text: 'Smoking cessation counseling - urgent priority', completed: true, category: 'education' },
     { id: '8', text: 'Nutritional counseling for cancer prevention', completed: false, category: 'education' }
   ]);
+  
+  // Collapsed sections state - start collapsed to show the feature
+  const [collapsedSections, setCollapsedSections] = useState({
+    clinicalNotes: true,
+    assessment: true,
+    plan: false
+  });
+  
+  const toggleSection = (section: keyof typeof collapsedSections) => {
+    setCollapsedSections(prev => ({
+      ...prev,
+      [section]: !prev[section]
+    }));
+  };
 
   useEffect(() => {
     // Listen for transcription updates
@@ -161,6 +188,21 @@ const ClinicalDocumentation: React.FC<ClinicalDocumentationProps> = ({
     console.log('Generating orders for:', checkedItems);
   };
 
+  // Override the onAddToSection to include note format
+  const handleAddToSection = (section: string, content: string, transcriptionId?: string) => {
+    if (onAddToSection) {
+      onAddToSection(section, content, transcriptionId);
+    }
+    
+    // Send update via WebSocket with note format preference
+    webSocketService.emit('notes:update', {
+      type: 'notes:update',
+      noteFormat: noteFormat,
+      section: section,
+      content: { text: content, action: 'append' }
+    });
+  };
+
   return (
     <Paper
       elevation={2}
@@ -195,6 +237,20 @@ const ClinicalDocumentation: React.FC<ClinicalDocumentationProps> = ({
           <Typography variant="caption" color="text.secondary">
             Auto-transcribed
           </Typography>
+          <Tooltip title="Note Format Settings">
+            <IconButton
+              size="small"
+              onClick={() => setSettingsOpen(true)}
+              sx={{ 
+                color: 'text.secondary',
+                '&:hover': {
+                  bgcolor: 'action.hover'
+                }
+              }}
+            >
+              <SettingsIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Button
             variant="contained"
             size="small"
@@ -236,16 +292,34 @@ const ClinicalDocumentation: React.FC<ClinicalDocumentationProps> = ({
 
         {/* Clinical Notes Section */}
         <Box sx={{ mb: 4 }}>
-          <Typography 
-            variant="h6" 
+          <Box 
             sx={{ 
-              fontWeight: 600,
+              display: 'flex', 
+              alignItems: 'center', 
               mb: 2,
-              color: 'text.primary'
+              cursor: 'pointer',
+              '&:hover': { bgcolor: 'action.hover' },
+              p: 1,
+              borderRadius: 1,
+              ml: -1
             }}
+            onClick={() => toggleSection('clinicalNotes')}
           >
-            Clinical Notes & History
-          </Typography>
+            <IconButton size="small" sx={{ mr: 1 }}>
+              {collapsedSections.clinicalNotes ? <ExpandMoreIcon /> : <ExpandLessIcon />}
+            </IconButton>
+            <Typography 
+              variant="h6" 
+              sx={{ 
+                fontWeight: 600,
+                color: 'text.primary'
+              }}
+            >
+              Clinical Notes & History
+            </Typography>
+          </Box>
+          
+          <Collapse in={!collapsedSections.clinicalNotes}>
 
           {/* Present Illness */}
           <Box sx={{ mb: 3 }}>
@@ -323,22 +397,41 @@ const ClinicalDocumentation: React.FC<ClinicalDocumentationProps> = ({
               </Typography>
             </Alert>
           </Box>
+          </Collapse>
         </Box>
 
         <Divider sx={{ my: 3 }} />
 
         {/* Assessment & Plan Section */}
         <Box>
-          <Typography 
-            variant="h6" 
+          <Box 
             sx={{ 
-              fontWeight: 600,
+              display: 'flex', 
+              alignItems: 'center', 
               mb: 2,
-              color: 'text.primary'
+              cursor: 'pointer',
+              '&:hover': { bgcolor: 'action.hover' },
+              p: 1,
+              borderRadius: 1,
+              ml: -1
             }}
+            onClick={() => toggleSection('assessment')}
           >
-            Assessment & Plan
-          </Typography>
+            <IconButton size="small" sx={{ mr: 1 }}>
+              {collapsedSections.assessment ? <ExpandMoreIcon /> : <ExpandLessIcon />}
+            </IconButton>
+            <Typography 
+              variant="h6" 
+              sx={{ 
+                fontWeight: 600,
+                color: 'text.primary'
+              }}
+            >
+              Assessment & Plan
+            </Typography>
+          </Box>
+          
+          <Collapse in={!collapsedSections.assessment}>
 
           {/* Working Diagnosis */}
           <Box sx={{ mb: 3 }}>
@@ -473,8 +566,26 @@ const ClinicalDocumentation: React.FC<ClinicalDocumentationProps> = ({
                 ))}
             </Box>
           </Box>
+          </Collapse>
         </Box>
       </Box>
+      
+      {/* Note Settings Dialog */}
+      <NoteSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        noteFormat={noteFormat}
+        onFormatChange={(format) => {
+          setNoteFormat(format);
+          // Store preference in localStorage
+          localStorage.setItem('noteFormat', format);
+          // Notify WebSocket service about format change
+          webSocketService.emit('settings:update', {
+            type: 'settings:update',
+            noteFormat: format
+          });
+        }}
+      />
     </Paper>
   );
 };

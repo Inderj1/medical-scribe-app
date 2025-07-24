@@ -16,31 +16,55 @@ import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
 import { formatDistanceToNow } from 'date-fns';
+import { useAuth } from '@clerk/clerk-react';
 import webSocketService from '../../services/websocket';
+import authService from '../../services/auth';
 
 interface ActionBarProps {
   onSaveDraft: () => void;
   onSignEncounter: () => void;
   isDraftSaved: boolean;
   lastSaveTime: Date;
+  encounterId?: string;
+  patientId?: string;
 }
 
 const ActionBar: React.FC<ActionBarProps> = ({
   onSaveDraft,
   onSignEncounter,
   isDraftSaved,
-  lastSaveTime
+  lastSaveTime,
+  encounterId = 'enc-001',
+  patientId = 'patient-001'
 }) => {
+  const { getToken } = useAuth();
   const [isSaving, setIsSaving] = React.useState(false);
   const [isSigningOff, setIsSigningOff] = React.useState(false);
   const [isRecording, setIsRecording] = React.useState(false);
   const [mediaRecorder, setMediaRecorder] = React.useState<MediaRecorder | null>(null);
   const [audioChunks, setAudioChunks] = React.useState<Blob[]>([]);
   const [isWebSocketConnected, setIsWebSocketConnected] = React.useState(false);
+  const [connectionError, setConnectionError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    // Check WebSocket connection status
+    // Listen for WebSocket connection status
+    const handleConnectionStatus = (data: any) => {
+      setIsWebSocketConnected(data.status === 'connected');
+      if (data.status === 'error') {
+        setConnectionError('WebSocket connection failed');
+      } else {
+        setConnectionError(null);
+      }
+    };
+
+    webSocketService.on('connection:status', handleConnectionStatus);
+    
+    // Check initial connection status
     setIsWebSocketConnected(webSocketService.isConnected());
+    
+    return () => {
+      webSocketService.off('connection:status', handleConnectionStatus);
+    };
   }, []);
 
   const handleSaveDraft = async () => {
@@ -80,15 +104,45 @@ const ActionBar: React.FC<ActionBarProps> = ({
     try {
       // Check if WebSocket is connected
       if (!webSocketService.isConnected()) {
-        console.log('WebSocket not connected, skipping connection for now');
-        // For now, we'll just record locally without streaming
-        // In production, you would connect the WebSocket here
-        // await webSocketService.connect(authToken);
+        console.log('WebSocket not connected, attempting to connect...');
+        
+        // Get authentication token from Clerk
+        const clerkToken = await getToken();
+        
+        if (!clerkToken) {
+          console.error('No Clerk token available');
+          setConnectionError('Authentication failed. Please sign in.');
+          return;
+        }
+        
+        try {
+          // Use Clerk token for WebSocket connection
+          await webSocketService.connect(clerkToken);
+          // Start encounter after connection
+          webSocketService.startEncounter(encounterId, patientId);
+        } catch (error) {
+          console.error('WebSocket connection failed:', error);
+          setConnectionError('Failed to connect to server');
+          return;
+        }
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 16000
+        } 
+      });
+      
+      // Check supported mime types
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      
       const recorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
+        mimeType: mimeType,
+        audioBitsPerSecond: 16000
       });
 
       recorder.ondataavailable = (event) => {
@@ -120,10 +174,15 @@ const ActionBar: React.FC<ActionBarProps> = ({
         setIsRecording(false);
         // Stop all tracks to release microphone
         stream.getTracks().forEach(track => track.stop());
+        
+        // End encounter if connected
+        if (webSocketService.isConnected()) {
+          webSocketService.endEncounter();
+        }
       };
 
-      // Start recording with 100ms chunks for real-time streaming
-      recorder.start(100);
+      // Start recording with 3 second chunks to get complete webm files
+      recorder.start(3000);
       setMediaRecorder(recorder);
     } catch (error) {
       console.error('Error accessing microphone:', error);
@@ -234,11 +293,13 @@ const ActionBar: React.FC<ActionBarProps> = ({
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
         <Tooltip 
           title={
-            !isWebSocketConnected 
-              ? "Recording locally (WebSocket not connected)" 
-              : isRecording 
-                ? "Stop recording" 
-                : "Start recording"
+            connectionError
+              ? connectionError
+              : !isWebSocketConnected 
+                ? "Click to connect and start recording" 
+                : isRecording 
+                  ? "Stop recording" 
+                  : "Start recording"
           }
         >
           <IconButton
@@ -285,7 +346,7 @@ const ActionBar: React.FC<ActionBarProps> = ({
               }}
             >
               {isRecording ? 'Recording' : 'Inactive'}
-              {!isWebSocketConnected && ' (Local Only)'}
+              {!isWebSocketConnected && ' (Not Connected)'}
             </Typography>
           </Box>
         </Box>

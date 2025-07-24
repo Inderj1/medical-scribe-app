@@ -1,16 +1,17 @@
-import openai
+from openai import OpenAI
 from typing import Optional, Dict, Any
 import logging
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
+import io
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
-openai.api_key = settings.OPENAI_API_KEY
+client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 @dataclass
@@ -30,6 +31,18 @@ class TranscriptionService:
     async def transcribe(self, audio_data: bytes) -> TranscriptionResult:
         """Transcribe audio using OpenAI Whisper API"""
         try:
+            # Log audio data info
+            logger.info(f"Transcribing audio: size={len(audio_data)} bytes")
+            
+            # Check minimum audio size (at least 1KB)
+            if len(audio_data) < 1024:
+                logger.warning(f"Audio data too small: {len(audio_data)} bytes")
+                return TranscriptionResult(
+                    text="",
+                    confidence=0.0,
+                    timestamp=datetime.utcnow()
+                )
+            
             # Process audio for Whisper
             from app.services.audio_processor import AudioProcessor
             processor = AudioProcessor(None)
@@ -40,6 +53,7 @@ class TranscriptionService:
             
             # Extract transcription
             text = response.get("text", "")
+            logger.info(f"Transcription result: '{text[:100]}...' (length: {len(text)})")
             
             # Calculate confidence (Whisper doesn't provide confidence scores directly)
             # We'll use text length and word count as a proxy
@@ -54,7 +68,8 @@ class TranscriptionService:
             )
             
         except Exception as e:
-            logger.error(f"Transcription error: {e}")
+            logger.error(f"Transcription error: {type(e).__name__}: {str(e)}")
+            logger.error(f"Stack trace:", exc_info=True)
             return TranscriptionResult(
                 text="",
                 confidence=0.0,
@@ -66,21 +81,40 @@ class TranscriptionService:
         try:
             # Run in executor to avoid blocking
             loop = asyncio.get_event_loop()
+            
+            # Convert audio_file to proper format if needed
+            if isinstance(audio_file, bytes):
+                audio_buffer = io.BytesIO(audio_file)
+                audio_buffer.name = "audio.webm"  # Whisper needs a filename
+            else:
+                audio_buffer = audio_file
+            
+            # Log API call details
+            logger.info(f"Calling Whisper API with model: {self.model}")
+            logger.debug(f"Audio buffer size: {audio_buffer.getbuffer().nbytes if hasattr(audio_buffer, 'getbuffer') else 'unknown'}")
+            
             response = await loop.run_in_executor(
                 None,
-                lambda: openai.Audio.transcribe(
+                lambda: client.audio.transcriptions.create(
                     model=self.model,
-                    file=audio_file,
+                    file=audio_buffer,
                     response_format="json",
                     language="en",
                     prompt="This is a medical consultation. Listen for medical terms, symptoms, diagnoses, and treatments."
                 )
             )
             
-            return response
+            # Log successful response
+            logger.info(f"Whisper API success: got transcription of length {len(response.text)}")
+            
+            # Convert response to dict format
+            return {"text": response.text, "language": "en"}
             
         except Exception as e:
-            logger.error(f"Whisper API error: {e}")
+            logger.error(f"Whisper API error: {type(e).__name__}: {str(e)}")
+            if hasattr(e, 'response'):
+                logger.error(f"API Response: {getattr(e.response, 'text', 'No response text')}")
+            logger.error(f"Stack trace:", exc_info=True)
             raise
             
     async def transcribe_with_speaker_diarization(self, audio_data: bytes) -> Dict[str, Any]:

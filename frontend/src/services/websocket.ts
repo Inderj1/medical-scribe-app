@@ -1,5 +1,3 @@
-import { io, Socket } from 'socket.io-client';
-
 export interface AudioChunk {
   audio_chunk: string;
   timestamp: number;
@@ -10,6 +8,7 @@ export interface TranscriptionUpdate {
   text: string;
   confidence: number;
   timestamp: string;
+  suggestedSection?: string;
 }
 
 export interface ClinicalNotesUpdate {
@@ -22,13 +21,12 @@ export interface ClinicalNotesUpdate {
 export interface VitalsUpdate {
   type: 'vitals:update';
   vitals: {
-    blood_pressure_systolic?: number;
-    blood_pressure_diastolic?: number;
+    blood_pressure?: string;
     heart_rate?: number;
     respiratory_rate?: number;
     temperature?: number;
     oxygen_saturation?: number;
-    pain_level?: number;
+    pain_level?: string;
   };
   timestamp: string;
 }
@@ -40,14 +38,30 @@ export interface ConnectionStatus {
   timestamp: string;
 }
 
-type WebSocketMessage = TranscriptionUpdate | ClinicalNotesUpdate | VitalsUpdate | ConnectionStatus;
+export interface EncounterStatus {
+  type: 'encounter:started' | 'encounter:ended';
+  encounter_id: string;
+  status?: string;
+}
+
+type WebSocketMessage = TranscriptionUpdate | ClinicalNotesUpdate | VitalsUpdate | ConnectionStatus | EncounterStatus;
+
+// Generic message type for runtime handling
+interface GenericMessage {
+  type: string;
+  [key: string]: any;
+}
 
 class WebSocketService {
-  private socket: Socket | null = null;
-  private audioBuffer: AudioChunk[] = [];
+  private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+  private reconnectDelay = 1000;
   private listeners: Map<string, Set<Function>> = new Map();
+  private messageQueue: any[] = [];
+  private isConnecting = false;
+  private token: string | null = null;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
   
   constructor() {
     this.connect = this.connect.bind(this);
@@ -57,163 +71,264 @@ class WebSocketService {
   
   connect(token: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const wsUrl = process.env.REACT_APP_WS_URL || 'ws://localhost:8000';
-      
-      this.socket = io(wsUrl, {
-        path: '/ws/audio-stream',
-        transports: ['websocket'],
-        auth: {
-          token
-        },
-        reconnection: true,
-        reconnectionAttempts: this.maxReconnectAttempts,
-        reconnectionDelay: 1000,
-      });
-      
-      this.socket.on('connect', () => {
-        console.log('WebSocket connected');
-        this.reconnectAttempts = 0;
-        this.emitLocal('connection:status', {
-          type: 'connection:status',
-          status: 'connected',
-          timestamp: new Date().toISOString()
-        });
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        console.log('WebSocket already connected');
         resolve();
-      });
+        return;
+      }
+
+      if (this.isConnecting) {
+        console.log('WebSocket connection already in progress, waiting...');
+        // Wait for the existing connection attempt to complete
+        const checkInterval = setInterval(() => {
+          if (!this.isConnecting) {
+            clearInterval(checkInterval);
+            if (this.socket?.readyState === WebSocket.OPEN) {
+              resolve();
+            } else {
+              reject(new Error('Connection failed'));
+            }
+          }
+        }, 100);
+        
+        // Timeout after 10 seconds
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          if (this.socket?.readyState === WebSocket.OPEN) {
+            resolve();
+          } else {
+            reject(new Error('Connection timeout'));
+          }
+        }, 10000);
+        return;
+      }
+
+      this.isConnecting = true;
+      this.token = token;
       
-      this.socket.on('disconnect', (reason) => {
-        console.log('WebSocket disconnected:', reason);
-        this.emitLocal('connection:status', {
-          type: 'connection:status',
-          status: 'disconnected',
-          timestamp: new Date().toISOString()
-        });
-      });
+      const wsUrl = process.env.REACT_APP_WS_URL || 'ws://localhost:8000';
+      // Use enhanced agentic AI endpoint
+      const url = `${wsUrl}/api/v1/ws/enhanced-audio-stream?token=${encodeURIComponent(token)}`;
       
-      this.socket.on('error', (error) => {
-        console.error('WebSocket error:', error);
-        this.emitLocal('connection:status', {
-          type: 'connection:status',
-          status: 'error',
-          timestamp: new Date().toISOString()
-        });
+      try {
+        this.socket = new WebSocket(url);
+        
+        this.socket.onopen = () => {
+          console.log('WebSocket connected');
+          this.isConnecting = false;
+          this.reconnectAttempts = 0;
+          
+          // Send any queued messages
+          while (this.messageQueue.length > 0) {
+            const message = this.messageQueue.shift();
+            this.sendMessage(message);
+          }
+          
+          // Start heartbeat
+          this.startHeartbeat();
+          
+          this.emitLocal('connection:status', {
+            type: 'connection:status',
+            status: 'connected',
+            timestamp: new Date().toISOString()
+          });
+          
+          resolve();
+        };
+        
+        this.socket.onclose = (event) => {
+          console.log('WebSocket disconnected:', event.code, event.reason);
+          this.isConnecting = false;
+          this.stopHeartbeat();
+          
+          this.emitLocal('connection:status', {
+            type: 'connection:status',
+            status: 'disconnected',
+            timestamp: new Date().toISOString()
+          });
+          
+          // Attempt to reconnect if not a normal closure
+          if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.scheduleReconnect();
+          }
+        };
+        
+        this.socket.onerror = (error) => {
+          console.error('WebSocket error:', error);
+          this.isConnecting = false;
+          
+          this.emitLocal('connection:status', {
+            type: 'connection:status',
+            status: 'error',
+            timestamp: new Date().toISOString()
+          });
+          
+          reject(error);
+        };
+        
+        this.socket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            this.handleMessage(data);
+          } catch (error) {
+            console.error('Error parsing WebSocket message:', error);
+          }
+        };
+        
+      } catch (error) {
+        this.isConnecting = false;
         reject(error);
-      });
-      
-      // Handle incoming messages
-      this.socket.on('message', (data: WebSocketMessage) => {
-        this.handleMessage(data);
-      });
-      
-      // Specific event handlers
-      this.socket.on('transcription:partial', (data: TranscriptionUpdate) => {
-        this.emitLocal('transcription:partial', data);
-      });
-      
-      this.socket.on('transcription:final', (data: TranscriptionUpdate) => {
-        this.emitLocal('transcription:final', data);
-      });
-      
-      this.socket.on('notes:update', (data: ClinicalNotesUpdate) => {
-        this.emitLocal('notes:update', data);
-      });
-      
-      this.socket.on('vitals:update', (data: VitalsUpdate) => {
-        this.emitLocal('vitals:update', data);
-      });
+      }
     });
   }
   
+  private scheduleReconnect(): void {
+    this.reconnectAttempts++;
+    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+    
+    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    
+    setTimeout(() => {
+      if (this.token) {
+        this.connect(this.token).catch(error => {
+          console.error('Reconnection failed:', error);
+        });
+      }
+    }, delay);
+  }
+  
+  private startHeartbeat(): void {
+    this.heartbeatInterval = setInterval(() => {
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        this.sendMessage({ type: 'ping' });
+      }
+    }, 30000); // Send ping every 30 seconds
+  }
+  
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+  
   disconnect(): void {
+    this.stopHeartbeat();
+    this.isConnecting = false;
+    
     if (this.socket) {
-      this.socket.disconnect();
+      this.socket.close(1000, 'Normal closure');
       this.socket = null;
     }
-    this.audioBuffer = [];
+    
+    this.messageQueue = [];
     this.listeners.clear();
+    this.token = null;
+    this.reconnectAttempts = 0;
+  }
+  
+  resetConnection(): void {
+    console.log('Resetting WebSocket connection');
+    this.isConnecting = false;
+    if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
+      this.socket.close();
+    }
+    this.socket = null;
+    this.stopHeartbeat();
+  }
+  
+  private sendMessage(message: any): void {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(message));
+    } else {
+      // Queue message if not connected
+      this.messageQueue.push(message);
+    }
   }
   
   startEncounter(encounterId: string, patientId: string): void {
-    if (!this.socket) {
-      throw new Error('WebSocket not connected');
-    }
-    
-    this.socket.emit('message', {
+    this.sendMessage({
       type: 'encounter:start',
       encounter_id: encounterId,
       patient_id: patientId
     });
   }
   
-  endEncounter(): void {
-    if (!this.socket) {
-      throw new Error('WebSocket not connected');
-    }
-    
-    // Send any remaining audio
-    this.flushAudioBuffer();
-    
-    this.socket.emit('message', {
-      type: 'encounter:end'
+  endEncounter(patientId?: string): void {
+    this.sendMessage({
+      type: 'encounter:end',
+      patient_id: patientId
     });
   }
   
   sendAudioChunk(audioData: ArrayBuffer): void {
-    if (!this.socket) {
-      throw new Error('WebSocket not connected');
-    }
-    
-    // Convert ArrayBuffer to base64
+    // Convert ArrayBuffer to base64 - handle large chunks
     const uint8Array = new Uint8Array(audioData);
-    const base64 = btoa(String.fromCharCode.apply(null, Array.from(uint8Array)));
+    let binary = '';
+    const chunkSize = 0x8000; // 32KB chunks to avoid call stack issues
     
-    const chunk: AudioChunk = {
-      audio_chunk: base64,
-      timestamp: Date.now()
-    };
-    
-    this.audioBuffer.push(chunk);
-    
-    // Send chunks in batches
-    if (this.audioBuffer.length >= 10 || Date.now() - this.audioBuffer[0].timestamp > 1000) {
-      this.flushAudioBuffer();
+    for (let i = 0; i < uint8Array.length; i += chunkSize) {
+      const chunk = uint8Array.subarray(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, Array.from(chunk));
     }
-  }
-  
-  private flushAudioBuffer(): void {
-    if (this.audioBuffer.length === 0 || !this.socket) return;
     
-    this.audioBuffer.forEach(chunk => {
-      this.socket!.emit('message', {
-        type: 'audio:stream',
-        audio_chunk: chunk.audio_chunk
-      });
+    const base64 = btoa(binary);
+    
+    this.sendMessage({
+      type: 'audio:stream',
+      audio_chunk: base64
     });
-    
-    this.audioBuffer = [];
   }
   
   updateVitals(vitals: VitalsUpdate['vitals']): void {
-    if (!this.socket) {
-      throw new Error('WebSocket not connected');
-    }
-    
-    this.socket.emit('message', {
+    this.sendMessage({
       type: 'vitals:update',
       vitals
     });
   }
   
-  sendPing(): void {
-    if (!this.socket) return;
-    
-    this.socket.emit('message', {
-      type: 'ping'
+  // Generic emit method for sending any message type
+  emit(type: string, data: any): void {
+    this.sendMessage({
+      type,
+      ...data
     });
   }
   
   private handleMessage(data: WebSocketMessage): void {
-    this.emitLocal(data.type, data);
+    // Handle specific message types
+    switch (data.type) {
+      case 'connection:status':
+        this.emitLocal('connection:status', data);
+        break;
+        
+      case 'transcription:partial':
+        this.emitLocal('transcription:partial', data);
+        break;
+        
+      case 'transcription:final':
+        this.emitLocal('transcription:final', data);
+        break;
+        
+      case 'notes:update':
+        this.emitLocal('notes:update', data);
+        break;
+        
+      case 'vitals:update':
+        this.emitLocal('vitals:update', data);
+        break;
+        
+      case 'encounter:started':
+      case 'encounter:ended':
+        this.emitLocal(data.type, data);
+        break;
+        
+      default:
+        // Handle any other message types
+        if ('type' in data) {
+          this.emitLocal((data as GenericMessage).type, data);
+        }
+    }
   }
   
   on(event: string, callback: Function): void {
@@ -232,20 +347,33 @@ class WebSocketService {
   private emitLocal(event: string, data: any): void {
     if (this.listeners.has(event)) {
       this.listeners.get(event)!.forEach(callback => {
-        callback(data);
+        try {
+          callback(data);
+        } catch (error) {
+          console.error(`Error in event listener for ${event}:`, error);
+        }
       });
     }
   }
   
   isConnected(): boolean {
-    return this.socket?.connected || false;
+    return this.socket?.readyState === WebSocket.OPEN;
   }
   
-  emit(event: string, data: any): void {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit(event, data);
-    } else {
-      console.warn(`Cannot emit ${event}: WebSocket not connected`);
+  getConnectionState(): string {
+    if (!this.socket) return 'CLOSED';
+    
+    switch (this.socket.readyState) {
+      case WebSocket.CONNECTING:
+        return 'CONNECTING';
+      case WebSocket.OPEN:
+        return 'OPEN';
+      case WebSocket.CLOSING:
+        return 'CLOSING';
+      case WebSocket.CLOSED:
+        return 'CLOSED';
+      default:
+        return 'UNKNOWN';
     }
   }
 }

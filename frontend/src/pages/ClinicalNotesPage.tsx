@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Grid, Alert, Button } from '@mui/material';
+import { Box, Grid, Alert, Button, CircularProgress, Backdrop, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import PatientHeader from '../components/ClinicalNotes/PatientHeader';
-import PatientSummaryVitals from '../components/ClinicalNotes/PatientSummaryVitals';
-import PhysicalExamination from '../components/ClinicalNotes/PhysicalExamination';
-import ClinicalDocumentation from '../components/ClinicalNotes/ClinicalDocumentation';
+import ClinicalDocumentationSplit from '../components/ClinicalNotes/ClinicalDocumentationSplit';
 import LiveTranscription from '../components/ClinicalNotes/LiveTranscription';
 import ActionBar from '../components/ClinicalNotes/ActionBar';
+import SpeakerIndicator from '../components/ClinicalNotes/SpeakerIndicator';
+import AgentStatus from '../components/ClinicalNotes/AgentStatus';
 import webSocketService from '../services/websocket';
 import { usePatient } from '../contexts/PatientContext';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
 interface PatientData {
   id: string;
@@ -74,7 +75,7 @@ function ClinicalNotesPage() {
   const encounter: EncounterData = selectedEncounter ? {
     id: selectedEncounter.id,
     patient_id: selectedEncounter.patient_id,
-    chief_complaint: selectedEncounter.chief_complaint,
+    chief_complaint: selectedEncounter.chief_complaint || 'General consultation',
     provider_name: selectedEncounter.provider_name,
     referring_physician: selectedEncounter.provider_name,
     encounter_date: selectedEncounter.encounter_date,
@@ -107,8 +108,23 @@ function ClinicalNotesPage() {
 
   const [isDraftSaved, setIsDraftSaved] = useState(true);
   const [lastSaveTime, setLastSaveTime] = useState(new Date());
+  const [transcriptionLinks, setTranscriptionLinks] = useState<Map<string, string>>(new Map());
+  
+  // New state for agent-based system
+  const [isLoadingEHR, setIsLoadingEHR] = useState(false);
+  const [clinicalNotesStarted, setClinicalNotesStarted] = useState(false);
+  const [currentSpeaker, setCurrentSpeaker] = useState<'DOCTOR' | 'PATIENT' | null>(null);
+  const [speakerConfidence, setSpeakerConfidence] = useState(0);
+  const [activeAgents, setActiveAgents] = useState<any[]>([]);
+  const [currentSection, setCurrentSection] = useState<string | null>(null);
+  const [sections, setSections] = useState<any>({});
 
   useEffect(() => {
+    // Auto-start clinical notes if coming from patient selection
+    if (selectedPatient && !clinicalNotesStarted) {
+      handleStartClinicalNotes();
+    }
+
     // Listen for real-time vital updates
     const handleVitalUpdate = (data: any) => {
       if (data.type === 'vitals:update') {
@@ -116,7 +132,55 @@ function ClinicalNotesPage() {
       }
     };
 
+    // Listen for clinical notes prefill
+    const handleClinicalNotesPrefill = (data: any) => {
+      setIsLoadingEHR(false);
+      setClinicalNotesStarted(true);
+      
+      // Pre-populate sections with EHR data
+      if (data.data?.sections) {
+        setSections(data.data.sections);
+        setVitals(data.data.sections.vitals || {});
+      }
+    };
+
+    // Listen for speaker identification
+    const handleSpeakerIdentified = (data: any) => {
+      setCurrentSpeaker(data.speaker);
+      setSpeakerConfidence(data.confidence);
+    };
+
+    // Listen for section updates from agents
+    const handleSectionUpdate = (data: any) => {
+      setSections((prev: any) => ({
+        ...prev,
+        [data.section]: data.content
+      }));
+      
+      // Update active agents
+      setActiveAgents((prev) => {
+        const existing = prev.find(a => a.section === data.section);
+        if (existing) {
+          return prev.map(a => 
+            a.section === data.section 
+              ? { ...a, status: 'completed', confidence: data.confidence }
+              : a
+          );
+        }
+        return [...prev, { 
+          section: data.section, 
+          status: 'completed', 
+          confidence: data.confidence 
+        }];
+      });
+      
+      setCurrentSection(data.section);
+    };
+
     webSocketService.on('vitals:update', handleVitalUpdate);
+    webSocketService.on('clinical_notes:prefill', handleClinicalNotesPrefill);
+    webSocketService.on('speaker:identified', handleSpeakerIdentified);
+    webSocketService.on('section:update', handleSectionUpdate);
 
     // Auto-save draft every 5 minutes
     const autoSaveInterval = setInterval(() => {
@@ -125,6 +189,9 @@ function ClinicalNotesPage() {
 
     return () => {
       webSocketService.off('vitals:update', handleVitalUpdate);
+      webSocketService.off('clinical_notes:prefill', handleClinicalNotesPrefill);
+      webSocketService.off('speaker:identified', handleSpeakerIdentified);
+      webSocketService.off('section:update', handleSectionUpdate);
       clearInterval(autoSaveInterval);
     };
   }, []);
@@ -140,9 +207,30 @@ function ClinicalNotesPage() {
     console.log('Signing encounter...');
   };
 
-  const handleAddToSection = (section: string, content: string) => {
+  const handleStartClinicalNotes = async () => {
+    if (!patient?.id) {
+      console.error('No patient selected');
+      return;
+    }
+    
+    setIsLoadingEHR(true);
+    
+    // Send request to start clinical notes and fetch EHR data
+    webSocketService.emit('clinical_notes:start', {
+      type: 'clinical_notes:start',
+      patient_id: patient.id,
+      encounter_type: 'routine_visit'
+    });
+  };
+
+  const handleAddToSection = (section: string, content: string, transcriptionId?: string) => {
     // This function will be called when user adds transcription to a section
     console.log(`Adding to section ${section}:`, content);
+    
+    // Store link between note text and transcription
+    if (transcriptionId) {
+      setTranscriptionLinks(prev => new Map(prev).set(`${section}-${Date.now()}`, transcriptionId));
+    }
     
     // Send update via WebSocket
     webSocketService.emit('notes:update', {
@@ -178,11 +266,14 @@ function ClinicalNotesPage() {
         </Alert>
       )}
       
-      {/* Patient Header */}
-      <PatientHeader 
-        patient={patient} 
-        encounter={encounter}
-      />
+      {/* Patient Header - Full Width */}
+      <Box sx={{ px: 2, py: 1 }}>
+        <PatientHeader 
+          patient={patient} 
+          encounter={encounter}
+          vitals={vitals}
+        />
+      </Box>
       
       {/* Main Content Grid - Full Width */}
       <Box sx={{ 
@@ -191,53 +282,105 @@ function ClinicalNotesPage() {
         px: 2,
         py: 1
       }}>
-        <Grid container spacing={2} sx={{ height: '100%' }}>
-          {/* Left Side: Live Transcription */}
-          <Grid item xs={12} md={4} sx={{ 
+        {!clinicalNotesStarted ? (
+          /* Start Clinical Notes Screen */
+          <Box sx={{
+            width: '100%',
             height: '100%',
-            overflow: 'hidden'
-          }}>
-            <LiveTranscription 
-              encounterId={encounter.id}
-              onAddToSection={handleAddToSection}
-            />
-          </Grid>
-
-          {/* Center: Clinical Documentation */}
-          <Grid item xs={12} md={5} sx={{ 
-            height: '100%',
-            overflow: 'hidden'
-          }}>
-            <ClinicalDocumentation 
-              encounterId={encounter.id}
-              patientId={patient.ehr_id || patient.id || '123'}
-            />
-          </Grid>
-
-          {/* Right Side: Patient Info Sidebar - Vertically Stacked */}
-          <Grid item xs={12} md={3} sx={{ 
-            height: '100%',
-            overflow: 'hidden',
             display: 'flex',
-            flexDirection: 'column',
-            gap: 2
+            alignItems: 'center',
+            justifyContent: 'center'
           }}>
-            {/* Patient Summary - Auto-sized */}
-            <PatientSummaryVitals 
-              patient={patient}
-              encounter={encounter}
-              vitals={vitals}
-            />
-            
-            {/* Physical Examination - Takes remaining space */}
-            <Box sx={{ flex: 1, minHeight: 0 }}>
-              <PhysicalExamination 
+            <Box sx={{
+              textAlign: 'center',
+              maxWidth: 600
+            }}>
+              <Button
+                variant="contained"
+                size="large"
+                startIcon={<PlayArrowIcon />}
+                onClick={handleStartClinicalNotes}
+                disabled={isLoadingEHR}
+                sx={{
+                  py: 2,
+                  px: 4,
+                  fontSize: '1.2rem',
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  '&:hover': {
+                    background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)'
+                  }
+                }}
+              >
+                Start Clinical Notes
+              </Button>
+            </Box>
+          </Box>
+        ) : (
+          /* Clinical Notes Interface */
+          <Box sx={{ display: 'flex', gap: 2, height: '100%' }}>
+            {/* Left Side: Live Transcription + Agent Status */}
+            <Box sx={{ 
+              width: 380,
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2
+            }}>
+              {/* Speaker Indicator */}
+              <SpeakerIndicator
+                currentSpeaker={currentSpeaker}
+                confidence={speakerConfidence}
+                isActive={currentSpeaker !== null}
+              />
+              
+              {/* Agent Status */}
+              <AgentStatus
+                activeAgents={activeAgents}
+                currentSection={currentSection || undefined}
+                isProcessing={activeAgents.some(a => a.status === 'processing')}
+              />
+              
+              {/* Live Transcription */}
+              <Box sx={{ flex: 1 }}>
+                <LiveTranscription 
+                  encounterId={encounter.id}
+                  onAddToSection={handleAddToSection}
+                />
+              </Box>
+            </Box>
+
+            {/* Right Side: Clinical Documentation */}
+            <Box sx={{ 
+              flex: 1,
+              height: '100%',
+              overflow: 'hidden'
+            }}>
+              <ClinicalDocumentationSplit 
                 encounterId={encounter.id}
+                patientId={patient.ehr_id || patient.id || '123'}
+                onAddToSection={handleAddToSection}
+                prefilledSections={sections}
               />
             </Box>
-          </Grid>
-        </Grid>
+          </Box>
+        )}
       </Box>
+      
+      {/* Loading Backdrop */}
+      <Backdrop
+        sx={{ 
+          color: '#fff', 
+          zIndex: (theme) => theme.zIndex.drawer + 1,
+          flexDirection: 'column',
+          gap: 2
+        }}
+        open={isLoadingEHR}
+      >
+        <CircularProgress color="inherit" size={60} />
+        <Typography variant="h6">
+          Loading patient data from EHR...
+        </Typography>
+      </Backdrop>
 
       {/* Action Bar */}
       <ActionBar 
@@ -245,6 +388,8 @@ function ClinicalNotesPage() {
         onSignEncounter={handleSignEncounter}
         isDraftSaved={isDraftSaved}
         lastSaveTime={lastSaveTime}
+        encounterId={encounter.id}
+        patientId={patient.ehr_id || patient.id || '123'}
       />
     </Box>
   );

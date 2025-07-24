@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.core.config import settings
-from app.api import auth, patients, encounters, transcriptions, websocket, ehr_integration, epic_auth, ehrbase, ehrbase_local
+from app.api import auth, patients, encounters, transcriptions, websocket, ehr_integration, epic_auth, ehrbase, ehrbase_local, openehr, enhanced_websocket
 from app.db.session import engine, Base
 
 # Configure logging
@@ -51,6 +51,8 @@ app.include_router(ehr_integration.router, prefix="/api/ehr", tags=["ehr"])
 app.include_router(epic_auth.router, prefix="/api/auth", tags=["epic-auth"])
 app.include_router(ehrbase.router, prefix="/api/ehrbase/proxy", tags=["ehrbase"])
 app.include_router(ehrbase_local.router, prefix="/api/ehrbase-local", tags=["ehrbase-local"])
+app.include_router(openehr.router, prefix="/api", tags=["openehr"])
+app.include_router(enhanced_websocket.router, prefix="/api/v1/ws", tags=["enhanced-websocket"])
 
 
 @app.get("/")
@@ -69,3 +71,31 @@ async def health_check():
         "database": "connected",
         "redis": "connected"
     }
+
+
+@app.get("/api/test/openai")
+async def test_openai():
+    """Test OpenAI API connection"""
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # Try a simple completion to test the API key
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Say 'API key is valid'"}],
+            max_tokens=10
+        )
+        
+        return {
+            "status": "success",
+            "message": "OpenAI API key is valid",
+            "response": response.choices[0].message.content
+        }
+    except Exception as e:
+        logger.error(f"OpenAI API test failed: {type(e).__name__}: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__
+        }

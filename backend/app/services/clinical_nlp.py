@@ -48,7 +48,7 @@ class ClinicalNLPService:
             "symptoms": re.compile(r'\b(?:complains? of|reports?|experiencing|has been having|symptoms?):\s*([^,\.]+)', re.I),
         }
         
-    async def extract_clinical_entities(self, text: str) -> ClinicalData:
+    async def extract_clinical_entities(self, text: str, note_format: str = 'long') -> ClinicalData:
         """Extract clinical entities from transcribed text"""
         try:
             # First, try to extract structured data using AI
@@ -65,7 +65,7 @@ class ClinicalNLPService:
             entities = self._extract_entities(text, structured_data)
             
             # Format content for the section
-            content = self._format_section_content(section, structured_data)
+            content = self._format_section_content(section, structured_data, note_format)
             
             return ClinicalData(
                 section=section,
@@ -88,9 +88,17 @@ class ClinicalNLPService:
     async def _extract_with_ai(self, text: str) -> Dict[str, Any]:
         """Use AI to extract structured clinical data"""
         try:
+            format_instructions = {
+                'long': 'Write detailed, complete sentences with comprehensive information. Include all relevant details and context.',
+                'short': 'Write concise sentences with key information only. Be brief but clear.',
+                'bullet': 'Use bullet points for each item. Start each point with a dash (-).'
+            }
+            
             prompt = f"""Extract clinical information from this medical transcript and return it as structured JSON.
 
 Transcript: {text}
+
+Format preference: {note_format} - {format_instructions.get(note_format, format_instructions['long'])}
 
 Return a JSON object with these fields:
 - chief_complaint: The main reason for the visit
@@ -102,17 +110,18 @@ Return a JSON object with these fields:
 - plan: Treatment plan
 - section_type: One of [history, review_of_systems, physical_exam, assessment, plan]
 
-Only include fields that are mentioned in the transcript."""
+Only include fields that are mentioned in the transcript. Format all text fields according to the format preference."""
 
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=1000,
+            # For Anthropic v0.7.0, use completions API
+            response = self.client.completions.create(
+                model="claude-instant-1.2",
+                max_tokens_to_sample=1000,
                 temperature=0,
-                messages=[{"role": "user", "content": prompt}]
+                prompt=f"\n\nHuman: {prompt}\n\nAssistant:"
             )
             
             # Extract JSON from response
-            json_text = response.content[0].text
+            json_text = response.completion
             
             # Try to find JSON in the response
             json_match = re.search(r'\{[\s\S]*\}', json_text)
@@ -229,7 +238,7 @@ Only include fields that are mentioned in the transcript."""
             
         return entities
         
-    def _format_section_content(self, section: NoteSection, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _format_section_content(self, section: NoteSection, data: Dict[str, Any], note_format: str = 'long') -> Dict[str, Any]:
         """Format content based on section type"""
         if section == NoteSection.HISTORY:
             return {

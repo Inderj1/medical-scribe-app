@@ -14,11 +14,22 @@ const SignUpPage: React.FC = () => {
         }}
       >
         <Paper elevation={3} sx={{ padding: 4, width: '100%' }}>
+          <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+            <img 
+              src="/2.png" 
+              alt="Medical Scribe Logo" 
+              style={{ 
+                height: '100px',
+                width: 'auto',
+                objectFit: 'contain'
+              }} 
+            />
+          </Box>
           <Typography component="h1" variant="h4" align="center" gutterBottom>
             Create Your Account
           </Typography>
           <Typography variant="body1" align="center" color="text.secondary" sx={{ mb: 3 }}>
-            Join Medical Scribe System to start managing patient records
+            Join our medical scribe system to start managing patient records
           </Typography>
           
           <Box sx={{ display: 'flex', justifyContent: 'center' }}>
