@@ -36,6 +36,8 @@ import { useUser, useAuth } from '@clerk/clerk-react';
 interface LiveTranscriptionProps {
   encounterId: string;
   onAddToSection?: (section: string, content: string, transcriptionId?: string) => void;
+  onCollapsedChange?: (collapsed: boolean) => void;
+  isCollapsed?: boolean;
 }
 
 interface TranscriptionSegment {
@@ -58,7 +60,9 @@ const SECTION_MAPPINGS = [
 
 const LiveTranscription: React.FC<LiveTranscriptionProps> = ({ 
   encounterId, 
-  onAddToSection 
+  onAddToSection,
+  onCollapsedChange,
+  isCollapsed: isCollapsedProp = false
 }) => {
   const { user } = useUser();
   const { getToken } = useAuth();
@@ -69,9 +73,16 @@ const LiveTranscription: React.FC<LiveTranscriptionProps> = ({
   const [isConnected, setIsConnected] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const [selectedSegment, setSelectedSegment] = useState<TranscriptionSegment | null>(null);
-  const [isCollapsed, setIsCollapsed] = useState(false); // For hiding to sidebar
+  const [isCollapsed, setIsCollapsed] = useState(isCollapsedProp); // For hiding to sidebar
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const transcriptionEndRef = useRef<null | HTMLDivElement>(null);
+
+  // Update parent when collapsed state changes
+  useEffect(() => {
+    if (onCollapsedChange) {
+      onCollapsedChange(isCollapsed);
+    }
+  }, [isCollapsed, onCollapsedChange]);
 
   useEffect(() => {
     let mounted = true;

@@ -392,15 +392,26 @@ class MedicalScribeServer:
             return
         
         try:
-            # Get database session
-            db = next(get_db())
+            logger.info(f"Starting clinical notes for patient {patient_id}")
             
-            # Initialize encounter in orchestrator
-            encounter_id = str(uuid.uuid4())
-            await self.agent_orchestrator.initialize_encounter(encounter_id, patient_id)
+            # Get database session properly for async context
+            from app.db.session import SessionLocal
+            db = SessionLocal()
             
-            # Fetch EHR data
-            prefill_data = await self.ehr_prefill_service.fetch_patient_data_for_notes(patient_id, db)
+            try:
+                # Initialize encounter in orchestrator
+                encounter_id = str(uuid.uuid4())
+                logger.info(f"Generated encounter ID: {encounter_id}")
+                
+                await self.agent_orchestrator.initialize_encounter(encounter_id, patient_id)
+                logger.info(f"Initialized encounter in agent orchestrator")
+                
+                # Fetch EHR data
+                logger.info(f"Fetching EHR data for patient {patient_id}")
+                prefill_data = await self.ehr_prefill_service.fetch_patient_data_for_notes(patient_id, db)
+                logger.info(f"EHR data fetch completed for patient {patient_id}")
+            finally:
+                db.close()
             
             # Store encounter ID for this user
             self.client_manager.add_encounter(user_id, encounter_id, patient_id)

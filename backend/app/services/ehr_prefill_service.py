@@ -46,7 +46,11 @@ class EHRPrefillService:
                 self._fetch_recent_encounters(patient_id, db)
             ]
             
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Add timeout protection to prevent hanging
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=30.0  # 30 second timeout
+            )
             
             # Combine results
             data = {
@@ -63,8 +67,11 @@ class EHRPrefillService:
             # Format for UI pre-population
             return self._format_for_clinical_notes(data)
             
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout fetching patient data for patient {patient_id}")
+            return self._get_empty_prefill()
         except Exception as e:
-            logger.error(f"Error fetching patient data: {str(e)}")
+            logger.error(f"Error fetching patient data for patient {patient_id}: {str(e)}")
             return self._get_empty_prefill()
     
     async def _fetch_demographics(self, patient: Patient) -> Dict:

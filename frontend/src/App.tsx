@@ -47,7 +47,8 @@ function AppContent() {
         <Route path="/sign-up" element={<SignUpPage />} />
         
         {/* Protected routes - with Container */}
-        <Route path="/" element={
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/home" element={
           <Container>
             <ProtectedRoute>
               <HomePage />
@@ -88,7 +89,7 @@ function AppContent() {
             </ProtectedRoute>
           </Container>
         } />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </div>
   );

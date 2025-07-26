@@ -14,7 +14,9 @@ import {
   Collapse,
   IconButton,
   Tooltip,
-  Grid
+  Grid,
+  Tabs,
+  Tab
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import AddIcon from '@mui/icons-material/Add';
@@ -22,8 +24,10 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import SettingsIcon from '@mui/icons-material/Settings';
 import AssignmentIcon from '@mui/icons-material/Assignment';
+import SummarizeIcon from '@mui/icons-material/Summarize';
 import webSocketService from '../../services/websocket';
 import NoteSettings, { NoteFormat } from './NoteSettings';
+import AfterVisitSummaryTab from './AfterVisitSummaryTab';
 
 interface ClinicalDocumentationSplitProps {
   encounterId: string;
@@ -72,6 +76,7 @@ const ClinicalDocumentationSplit: React.FC<ClinicalDocumentationSplitProps> = ({
   const [noteFormat, setNoteFormat] = useState<NoteFormat>(
     (localStorage.getItem('noteFormat') as NoteFormat) || 'long'
   );
+  const [currentTab, setCurrentTab] = useState(0);
   
   // Format-specific clinical data
   const getFormattedPresentIllness = (): Symptom[] => {
@@ -294,6 +299,10 @@ const ClinicalDocumentationSplit: React.FC<ClinicalDocumentationSplitProps> = ({
     console.log('Generating orders for:', checkedItems);
   };
 
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setCurrentTab(newValue);
+  };
+
   // Override the onAddToSection to include note format
   const handleAddToSection = (section: string, content: string, transcriptionId?: string) => {
     if (onAddToSection) {
@@ -369,32 +378,57 @@ const ClinicalDocumentationSplit: React.FC<ClinicalDocumentationSplitProps> = ({
         </Box>
       </Box>
 
-      <Box sx={{ flex: 1, overflow: 'hidden', p: 2, display: 'flex', flexDirection: 'column' }}>
-        {/* Live Transcription Display */}
-        {isTranscribing && currentTranscription && (
-          <Fade in={true}>
-            <Box sx={{ 
-              mb: 2, 
-              p: 2, 
-              bgcolor: '#e3f2fd', 
-              borderRadius: 1,
-              border: '1px solid #90caf9'
-            }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                <Typography variant="caption" fontWeight={600} color="primary">
-                  Live Transcription
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Confidence: {Math.round(transcriptionConfidence * 100)}%
-                </Typography>
-              </Box>
-              <Typography variant="body2">
-                {currentTranscription}
-              </Typography>
-              <LinearProgress variant="indeterminate" sx={{ mt: 1 }} />
-            </Box>
-          </Fade>
-        )}
+      {/* Tab Navigation */}
+      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Tabs 
+          value={currentTab} 
+          onChange={handleTabChange}
+          sx={{ px: 2 }}
+        >
+          <Tab 
+            icon={<DescriptionIcon />} 
+            label="Clinical Notes" 
+            iconPosition="start"
+            sx={{ textTransform: 'none' }}
+          />
+          <Tab 
+            icon={<SummarizeIcon />} 
+            label="After-Visit Summary" 
+            iconPosition="start"
+            sx={{ textTransform: 'none' }}
+          />
+        </Tabs>
+      </Box>
+
+      <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        {/* Tab Content */}
+        {currentTab === 0 && (
+          <Box sx={{ flex: 1, overflow: 'hidden', p: 2, display: 'flex', flexDirection: 'column' }}>
+            {/* Live Transcription Display */}
+            {isTranscribing && currentTranscription && (
+              <Fade in={true}>
+                <Box sx={{ 
+                  mb: 2, 
+                  p: 2, 
+                  bgcolor: '#e3f2fd', 
+                  borderRadius: 1,
+                  border: '1px solid #90caf9'
+                }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                    <Typography variant="caption" fontWeight={600} color="primary">
+                      Live Transcription
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Confidence: {Math.round(transcriptionConfidence * 100)}%
+                    </Typography>
+                  </Box>
+                  <Typography variant="body2">
+                    {currentTranscription}
+                  </Typography>
+                  <LinearProgress variant="indeterminate" sx={{ mt: 1 }} />
+                </Box>
+              </Fade>
+            )}
 
         {/* Two Column Layout */}
         <Grid container spacing={2} sx={{ flex: 1, height: '100%', minHeight: 0 }}>
@@ -792,6 +826,25 @@ const ClinicalDocumentationSplit: React.FC<ClinicalDocumentationSplitProps> = ({
             </Paper>
           </Grid>
         </Grid>
+          </Box>
+        )}
+        
+        {/* After-Visit Summary Tab */}
+        {currentTab === 1 && (
+          <AfterVisitSummaryTab
+            encounterId={encounterId}
+            patientId={patientId}
+            clinicalData={{
+              chief_complaint: prefilledSections?.chief_complaint,
+              presentIllness: presentIllness,
+              diagnoses: diagnoses,
+              planItems: planItems,
+              vitals: prefilledSections?.vitals,
+              riskFactors: riskFactors,
+              previousInterventions: previousInterventions
+            }}
+          />
+        )}
       </Box>
       
       {/* Note Settings Dialog */}
