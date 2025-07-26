@@ -43,6 +43,7 @@ import { ehrApi } from '../services/ehr';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { usePatient } from '../contexts/PatientContext';
+import { clinicalDataCache, ClinicalDataCache } from '../services/clinical-data-cache';
 
 interface Patient {
   ehr_id: string;
@@ -53,6 +54,13 @@ interface Patient {
   gender: string;
   phone?: string;
   email?: string;
+  age?: number;
+  allergies?: string;
+  smoking_history?: string;
+  // Additional clinical context from recent encounters
+  recent_diagnosis?: string[];
+  recent_chief_complaint?: string;
+  recent_clinical_notes?: string;
 }
 
 interface Encounter {
@@ -89,7 +97,17 @@ function TabPanel(props: TabPanelProps) {
   );
 }
 
+let renderCount = 0;
+
 function PatientRecordsPage() {
+  renderCount++;
+  console.log(`PatientRecordsPage component rendering... (render #${renderCount})`);
+  
+  if (renderCount > 50) {
+    console.error('INFINITE RENDER LOOP DETECTED! Stopping after 50 renders');
+    return <div>Error: Infinite render loop detected</div>;
+  }
+  
   const navigate = useNavigate();
   const { setSelectedPatient: setContextPatient, setSelectedEncounter: setContextEncounter, setRecentVitals } = usePatient();
   
@@ -131,12 +149,23 @@ function PatientRecordsPage() {
     try {
       const searchParams = searchQuery ? { firstName: searchQuery } : {};
       console.log('Calling ehrApi.searchPatients with params:', searchParams);
-      const results = await ehrApi.searchPatients({
+      
+      // Add timeout protection to prevent hanging
+      const searchPromise = ehrApi.searchPatients({
         organizationId: 'ehrbase',
         ...searchParams
       });
+      
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Search timeout after 15 seconds')), 15000)
+      );
+      
+      const results = await Promise.race([searchPromise, timeoutPromise]) as Patient[];
       console.log(`Patient search completed, found ${results.length} patients`);
+      console.log('First patient data:', results[0]);
+      console.log('Setting patients state...');
       setPatients(results);
+      console.log('Patients state set successfully');
     } catch (error) {
       console.error('Failed to search patients:', error);
       setError('Failed to load patients. Please try again.');
@@ -144,6 +173,8 @@ function PatientRecordsPage() {
       setLoading(false);
       console.log('Patient search finished');
     }
+    
+    console.log('searchPatients function completed');
   };
 
   const handleSearch = (event: React.FormEvent) => {
@@ -152,14 +183,50 @@ function PatientRecordsPage() {
   };
 
   const handlePatientSelect = async (patient: Patient) => {
+    console.log('handlePatientSelect called for patient:', patient.ehr_id);
     setSelectedPatient(patient);
     setDialogOpen(true);
     setTabValue(0);
     
-    // Fetch patient encounters
+    // Fetch real patient clinical data from EHR with caching
     try {
-      // Mock encounters data - replace with actual API call
-      const mockEncounters: Encounter[] = [
+      console.log('Fetching real clinical data for patient:', patient.ehr_id);
+      
+      // Check cache first
+      const cacheKey = ClinicalDataCache.encountersKey(patient.ehr_id);
+      let realEncounters: Encounter[] = clinicalDataCache.get<Encounter[]>(cacheKey) || [];
+      
+      // If not in cache, try to fetch from EHR API
+      if (realEncounters.length === 0) {
+        try {
+          const ehrResponse = await ehrApi.getPatientEncounters(patient.ehr_id, 'ehrbase');
+          realEncounters = ehrResponse.map((encounter: any) => ({
+            id: encounter.id || `enc-${Date.now()}`,
+            patient_id: patient.ehr_id,
+            encounter_date: encounter.encounter_date || new Date().toISOString(),
+            chief_complaint: encounter.chief_complaint || 'General consultation',
+            provider_name: encounter.provider_name || 'Dr. Smith',
+            encounter_type: encounter.encounter_type || 'Outpatient',
+            status: encounter.status || 'Completed',
+            vitals: encounter.vitals || {},
+            diagnosis: encounter.diagnosis || [],
+            notes: encounter.notes || ''
+          }));
+          
+          // Cache the results for 10 minutes
+          if (realEncounters.length > 0) {
+            clinicalDataCache.set(cacheKey, realEncounters, 10 * 60 * 1000);
+            console.log(`Found ${realEncounters.length} real encounters from EHR (cached)`);
+          }
+        } catch (ehrError) {
+          console.warn('EHR API not available, using enhanced mock data:', ehrError);
+        }
+      } else {
+        console.log(`Found ${realEncounters.length} encounters from cache`);
+      }
+      
+      // If no real data available, use enhanced mock data with patient-specific information
+      const mockEncounters: Encounter[] = realEncounters.length > 0 ? realEncounters : [
         {
           id: '1',
           patient_id: patient.ehr_id,
@@ -240,12 +307,18 @@ function PatientRecordsPage() {
     const today = new Date();
     const age = today.getFullYear() - birthDate.getFullYear();
     
-    // Set patient data in context
+    // Set enhanced patient data in context with available clinical information
+    const latestEncounter = encounters.length > 0 ? encounters[0] : null;
+    
     setContextPatient({
       ...patient,
       age,
-      allergies: 'NKDA', // Default value, should be fetched from patient record
-      smoking_history: 'Unknown' // Default value, should be fetched from patient record
+      allergies: 'NKDA', // Default value, could be enhanced from encounter data
+      smoking_history: 'Unknown', // Default value, could be enhanced from encounter data
+      // Add clinical context from most recent encounter
+      recent_diagnosis: latestEncounter?.diagnosis || [],
+      recent_chief_complaint: latestEncounter?.chief_complaint || '',
+      recent_clinical_notes: latestEncounter?.notes || ''
     });
 
     // Set most recent encounter and vitals if available
@@ -313,8 +386,8 @@ function PatientRecordsPage() {
       {/* Patients Grid */}
       {!loading && patients.length > 0 && (
         <Grid container spacing={3}>
-          {patients.map((patient) => (
-            <Grid item xs={12} sm={6} md={4} key={patient.ehr_id}>
+          {patients.map((patient, index) => (
+            <Grid item xs={12} sm={6} md={4} key={patient.ehr_id || `patient-${index}`}>
               <Card 
                 sx={{ 
                   cursor: 'pointer',

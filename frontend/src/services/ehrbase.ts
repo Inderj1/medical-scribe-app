@@ -261,9 +261,58 @@ class EHRBaseService {
       
       console.log(`Found ${patients.length} patients from EHRBASE:`, patients);
       
-      return patients;
+      // Map the EHR response structure to our Patient interface
+      const mappedPatients = patients.map((ehrPatient: any) => {
+        if (ehrPatient.patient) {
+          // Extract name parts from the full name
+          const nameParts = (ehrPatient.patient.name || '').split(' ');
+          const firstName = nameParts[0] || '';
+          const lastName = nameParts.slice(1).join(' ') || '';
+          
+          return {
+            ehr_id: ehrPatient.ehr_id,
+            mrn: ehrPatient.patient.external_ref?.id || `MRN-${ehrPatient.ehr_id.substring(0, 8)}`,
+            first_name: firstName,
+            last_name: lastName,
+            date_of_birth: ehrPatient.patient.date_of_birth || '',
+            gender: ehrPatient.patient.gender || '',
+            phone: '',
+            email: ''
+          };
+        }
+        // Fallback if patient data is in different format
+        return ehrPatient;
+      });
+      
+      return mappedPatients;
     } catch (error) {
       console.error('Failed to search patients - Full error:', error);
+      if (axios.isAxiosError(error)) {
+        console.error('Axios error details:', {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status,
+          url: error.config?.url
+        });
+      }
+      return [];
+    }
+  }
+
+  // Get patient encounters from EHR
+  async getPatientEncounters(ehrId: string): Promise<any[]> {
+    console.log('EHRBASE getPatientEncounters called for ehrId:', ehrId);
+    
+    try {
+      // Try to get real encounter data from EHRBASE API
+      console.log('Fetching patient encounters using ehrbaseAPI...');
+      const encounters = await ehrbaseAPI.getPatientEncounters(ehrId);
+      
+      console.log(`Found ${encounters.length} encounters from EHRBASE:`, encounters);
+      
+      return encounters;
+    } catch (error) {
+      console.error('Failed to get patient encounters - Full error:', error);
       if (axios.isAxiosError(error)) {
         console.error('Axios error details:', {
           message: error.message,

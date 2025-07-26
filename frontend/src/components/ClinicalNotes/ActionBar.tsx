@@ -27,6 +27,7 @@ interface ActionBarProps {
   lastSaveTime: Date;
   encounterId?: string;
   patientId?: string;
+  onShowSummaryReview?: () => void;
 }
 
 const ActionBar: React.FC<ActionBarProps> = ({
@@ -35,7 +36,8 @@ const ActionBar: React.FC<ActionBarProps> = ({
   isDraftSaved,
   lastSaveTime,
   encounterId = 'enc-001',
-  patientId = 'patient-001'
+  patientId = 'patient-001',
+  onShowSummaryReview
 }) => {
   const { getToken } = useAuth();
   const [isSaving, setIsSaving] = React.useState(false);
@@ -74,6 +76,12 @@ const ActionBar: React.FC<ActionBarProps> = ({
   };
 
   const handleSignEncounter = async () => {
+    // First, show summary review if callback is provided
+    if (onShowSummaryReview) {
+      onShowSummaryReview();
+      return;
+    }
+    
     const confirmed = window.confirm(
       'Are you ready to sign and close this encounter? All documentation will be finalized.'
     );
@@ -235,7 +243,7 @@ const ActionBar: React.FC<ActionBarProps> = ({
           startIcon={isSigningOff ? <CircularProgress size={16} /> : <CheckCircleIcon />}
           sx={{ textTransform: 'none' }}
         >
-          {isSigningOff ? 'Signing...' : 'Sign & Close Encounter'}
+          {isSigningOff ? 'Signing...' : onShowSummaryReview ? 'Review Summary & Sign' : 'Sign & Close Encounter'}
         </Button>
         
         <Button

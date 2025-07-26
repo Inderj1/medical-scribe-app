@@ -5,8 +5,6 @@ import PatientHeader from '../components/ClinicalNotes/PatientHeader';
 import ClinicalDocumentationSplit from '../components/ClinicalNotes/ClinicalDocumentationSplit';
 import LiveTranscription from '../components/ClinicalNotes/LiveTranscription';
 import ActionBar from '../components/ClinicalNotes/ActionBar';
-import SpeakerIndicator from '../components/ClinicalNotes/SpeakerIndicator';
-import AgentStatus from '../components/ClinicalNotes/AgentStatus';
 import webSocketService from '../services/websocket';
 import { usePatient } from '../contexts/PatientContext';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -24,6 +22,10 @@ interface PatientData {
   allergies?: string;
   phone?: string;
   email?: string;
+  // Additional clinical context from recent encounters
+  recent_diagnosis?: string[];
+  recent_chief_complaint?: string;
+  recent_clinical_notes?: string;
 }
 
 interface EncounterData {
@@ -58,7 +60,10 @@ function ClinicalNotesPage() {
     smoking_history: selectedPatient.smoking_history,
     allergies: selectedPatient.allergies,
     phone: selectedPatient.phone,
-    email: selectedPatient.email
+    email: selectedPatient.email,
+    recent_diagnosis: selectedPatient.recent_diagnosis,
+    recent_chief_complaint: selectedPatient.recent_chief_complaint,
+    recent_clinical_notes: selectedPatient.recent_clinical_notes
   } : {
     id: '123',
     first_name: 'John',
@@ -113,11 +118,10 @@ function ClinicalNotesPage() {
   // New state for agent-based system
   const [isLoadingEHR, setIsLoadingEHR] = useState(false);
   const [clinicalNotesStarted, setClinicalNotesStarted] = useState(false);
-  const [currentSpeaker, setCurrentSpeaker] = useState<'DOCTOR' | 'PATIENT' | null>(null);
-  const [speakerConfidence, setSpeakerConfidence] = useState(0);
   const [activeAgents, setActiveAgents] = useState<any[]>([]);
   const [currentSection, setCurrentSection] = useState<string | null>(null);
   const [sections, setSections] = useState<any>({});
+  const [showSummaryReview, setShowSummaryReview] = useState(false);
 
   useEffect(() => {
     // Auto-start clinical notes if coming from patient selection
@@ -144,11 +148,6 @@ function ClinicalNotesPage() {
       }
     };
 
-    // Listen for speaker identification
-    const handleSpeakerIdentified = (data: any) => {
-      setCurrentSpeaker(data.speaker);
-      setSpeakerConfidence(data.confidence);
-    };
 
     // Listen for section updates from agents
     const handleSectionUpdate = (data: any) => {
@@ -179,7 +178,6 @@ function ClinicalNotesPage() {
 
     webSocketService.on('vitals:update', handleVitalUpdate);
     webSocketService.on('clinical_notes:prefill', handleClinicalNotesPrefill);
-    webSocketService.on('speaker:identified', handleSpeakerIdentified);
     webSocketService.on('section:update', handleSectionUpdate);
 
     // Auto-save draft every 5 minutes
@@ -190,7 +188,6 @@ function ClinicalNotesPage() {
     return () => {
       webSocketService.off('vitals:update', handleVitalUpdate);
       webSocketService.off('clinical_notes:prefill', handleClinicalNotesPrefill);
-      webSocketService.off('speaker:identified', handleSpeakerIdentified);
       webSocketService.off('section:update', handleSectionUpdate);
       clearInterval(autoSaveInterval);
     };
@@ -207,6 +204,12 @@ function ClinicalNotesPage() {
     console.log('Signing encounter...');
   };
 
+  const handleShowSummaryReview = () => {
+    // Switch to summary tab for review
+    setShowSummaryReview(true);
+    // You could also trigger tab switch in ClinicalDocumentationSplit if needed
+  };
+
   const handleStartClinicalNotes = async () => {
     if (!patient?.id) {
       console.error('No patient selected');
@@ -215,12 +218,63 @@ function ClinicalNotesPage() {
     
     setIsLoadingEHR(true);
     
-    // Send request to start clinical notes and fetch EHR data
-    webSocketService.emit('clinical_notes:start', {
-      type: 'clinical_notes:start',
-      patient_id: patient.id,
-      encounter_type: 'routine_visit'
-    });
+    // Since we already have patient data from Patient Records page,
+    // create the prefill data structure directly instead of doing another EHR search
+    const prefillData = {
+      patient_info: {
+        name: `${patient.first_name} ${patient.last_name}`,
+        mrn: patient.mrn,
+        date_of_birth: patient.date_of_birth,
+        age: patient.age,
+        gender: patient.gender,
+        phone: patient.phone,
+        email: patient.email,
+        ehr_id: patient.ehr_id
+      },
+      sections: {
+        chief_complaint: patient.recent_chief_complaint || selectedEncounter?.chief_complaint || "",
+        history_present_illness: "",
+        past_medical_history: patient.recent_diagnosis || selectedEncounter?.diagnosis || [],
+        medications: [],
+        allergies: patient.allergies ? [patient.allergies] : ["NKDA"],
+        social_history: {
+          smoking: patient.smoking_history || "Unknown",
+          alcohol: "Unknown",
+          occupation: "Unknown"
+        },
+        family_history: [],
+        review_of_systems: {},
+        vitals: recentVitals || selectedEncounter?.vitals || {},
+        physical_exam: {},
+        assessment_plan: {
+          clinical_notes: patient.recent_clinical_notes || selectedEncounter?.notes || "",
+          diagnosis: patient.recent_diagnosis || selectedEncounter?.diagnosis || []
+        }
+      },
+      recent_labs: [],
+      recent_encounters: selectedEncounter ? [{
+        date: selectedEncounter.encounter_date,
+        type: selectedEncounter.encounter_type,
+        chief_complaint: selectedEncounter.chief_complaint,
+        provider: selectedEncounter.provider_name,
+        status: selectedEncounter.status
+      }] : [],
+      metadata: {
+        prefill_timestamp: new Date().toISOString(),
+        data_sources: ["patient_context"],
+        source: "existing_patient_selection"
+      }
+    };
+
+    // Set the prefilled data directly
+    setSections(prefillData.sections);
+    setVitals(prefillData.sections.vitals || {});
+    
+    // Mark as completed without WebSocket call
+    setIsLoadingEHR(false);
+    setClinicalNotesStarted(true);
+    
+    console.log('Clinical notes started with existing patient data:', prefillData);
   };
 
   const handleAddToSection = (section: string, content: string, transcriptionId?: string) => {
@@ -240,6 +294,8 @@ function ClinicalNotesPage() {
     });
   };
 
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
   return (
     <Box sx={{ 
       display: 'flex', 
@@ -247,27 +303,8 @@ function ClinicalNotesPage() {
       height: '100vh',
       bgcolor: '#f8f9fa' 
     }}>
-      {/* Show notification if patient data is loaded from context */}
-      {selectedPatient && (
-        <Alert 
-          severity="info" 
-          sx={{ m: 2, mb: 0 }}
-          action={
-            <Button 
-              color="inherit" 
-              size="small"
-              onClick={() => navigate('/patient-records')}
-            >
-              Back to Patients
-            </Button>
-          }
-        >
-          Clinical note for patient: {patient.first_name} {patient.last_name} (MRN: {patient.mrn})
-        </Alert>
-      )}
-      
-      {/* Patient Header - Full Width */}
-      <Box sx={{ px: 2, py: 1 }}>
+      {/* Patient Header - Full Width in light blue section */}
+      <Box sx={{ px: 2, py: 2 }}>
         <PatientHeader 
           patient={patient} 
           encounter={encounter}
@@ -318,36 +355,38 @@ function ClinicalNotesPage() {
         ) : (
           /* Clinical Notes Interface */
           <Box sx={{ display: 'flex', gap: 2, height: '100%' }}>
-            {/* Left Side: Live Transcription + Agent Status */}
-            <Box sx={{ 
-              width: 380,
-              height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2
-            }}>
-              {/* Speaker Indicator */}
-              <SpeakerIndicator
-                currentSpeaker={currentSpeaker}
-                confidence={speakerConfidence}
-                isActive={currentSpeaker !== null}
-              />
-              
-              {/* Agent Status */}
-              <AgentStatus
-                activeAgents={activeAgents}
-                currentSection={currentSection || undefined}
-                isProcessing={activeAgents.some(a => a.status === 'processing')}
-              />
-              
-              {/* Live Transcription */}
-              <Box sx={{ flex: 1 }}>
+            {/* Left Side: Live Transcription */}
+            {!isSidebarCollapsed && (
+              <Box sx={{ 
+                width: 380,
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2
+              }}>
                 <LiveTranscription 
                   encounterId={encounter.id}
                   onAddToSection={handleAddToSection}
+                  onCollapsedChange={setIsSidebarCollapsed}
+                  isCollapsed={isSidebarCollapsed}
                 />
               </Box>
-            </Box>
+            )}
+
+            {/* Collapsed Sidebar */}
+            {isSidebarCollapsed && (
+              <Box sx={{ 
+                width: 60,
+                height: '100%'
+              }}>
+                <LiveTranscription 
+                  encounterId={encounter.id}
+                  onAddToSection={handleAddToSection}
+                  onCollapsedChange={setIsSidebarCollapsed}
+                  isCollapsed={isSidebarCollapsed}
+                />
+              </Box>
+            )}
 
             {/* Right Side: Clinical Documentation */}
             <Box sx={{ 
@@ -390,6 +429,7 @@ function ClinicalNotesPage() {
         lastSaveTime={lastSaveTime}
         encounterId={encounter.id}
         patientId={patient.ehr_id || patient.id || '123'}
+        onShowSummaryReview={handleShowSummaryReview}
       />
     </Box>
   );

@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: medical-scribe-db
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-medscribe}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-secure_password}
+      POSTGRES_DB: ${DATABASE_NAME:-medical_scribe}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-medscribe}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: medical-scribe-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: medical-scribe-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${DATABASE_USER:-medscribe}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-secure_password}
+      DATABASE_NAME: ${DATABASE_NAME:-medical_scribe}
+      DATABASE_URL: postgresql://${DATABASE_USER:-medscribe}:${DATABASE_PASSWORD:-secure_password}@postgres:5432/${DATABASE_NAME:-medical_scribe}
+      
+      # Redis
+      REDIS_URL: redis://redis:6379
+      
+      # Application
+      SECRET_KEY: ${SECRET_KEY:-your_secret_key_here}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      
+      # Auth
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+      
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      
+      # EHR Integration
+      OPENEHR_API_URL: ${OPENEHR_API_URL:-http://98.86.40.56}
+      
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,https://yourdomain.com}
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

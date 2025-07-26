@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 const EHRBASE_PROXY_URL = `${API_BASE_URL}/api/ehrbase/proxy`;
+const EHR_DIRECT_URL = 'http://98.86.40.56';
 
 interface EHRData {
   ehr_id: {
@@ -243,15 +244,42 @@ class EHRBaseAPI {
     mrn?: string;
   }): Promise<any[]> {
     try {
-      console.log('Searching for patients in EHRBASE...');
+      console.log('Searching for patients in EHR system...');
       
-      // Since the EHRBASE REST API returns 500 errors, we need to use the medical records API
-      // that serves the actual patient data from EHRBASE via ngrok
-      const { medicalRecordsAPI } = await import('./ehrbase-medical-records-api');
-      return await medicalRecordsAPI.searchPatients(filters);
+      // Use direct EHR endpoint
+      const response = await axios.get(`${EHR_DIRECT_URL}/api/patients`, {
+        params: filters
+      });
+      
+      console.log('Patients found:', response.data);
+      // Check if response has a 'patients' property (API returns {patients: [...]})
+      if (response.data && response.data.patients) {
+        return response.data.patients;
+      }
+      return response.data || [];
       
     } catch (error) {
       console.error('Failed to search patients:', error);
+      return [];
+    }
+  }
+
+  // Get dotphrases from EHR system
+  async getDotphrases(): Promise<any[]> {
+    try {
+      console.log('Fetching dotphrases from EHR system...');
+      
+      const response = await axios.get(`${EHR_DIRECT_URL}/api/dotphrases`);
+      
+      console.log('Dotphrases found:', response.data);
+      // Check if response has a 'dotphrases' property
+      if (response.data && response.data.dotphrases) {
+        return response.data.dotphrases;
+      }
+      return response.data || [];
+      
+    } catch (error) {
+      console.error('Failed to fetch dotphrases:', error);
       return [];
     }
   }
@@ -410,6 +438,78 @@ class EHRBaseAPI {
     };
 
     return this.createComposition(ehrId, composition);
+  }
+
+  // Get patient encounters/compositions
+  async getPatientEncounters(ehrId: string): Promise<any[]> {
+    try {
+      console.log(`Getting encounters for EHR ID: ${ehrId}`);
+      
+      // Use AQL to get patient encounters/compositions
+      const aqlQuery = `
+        SELECT 
+          c/uid/value as composition_id,
+          c/context/start_time/value as encounter_date,
+          c/content[openEHR-EHR-EVALUATION.clinical_synopsis.v1]/data[at0001]/items[at0002]/value/value as chief_complaint,
+          c/content[openEHR-EHR-OBSERVATION.vital_signs.v1]/data[at0001]/events[at0006]/data[at0003]/items as vitals,
+          c/composer/name as provider_name
+        FROM EHR e[ehr_id/value='${ehrId}']
+        CONTAINS COMPOSITION c
+        ORDER BY c/context/start_time/value DESC
+        LIMIT 10
+      `;
+
+      const result = await this.executeAQL(aqlQuery);
+      
+      if (result && result.rows) {
+        const encounters = result.rows.map((row: any[], index: number) => ({
+          id: row[0] || `enc-${Date.now()}-${index}`,
+          encounter_date: row[1] || new Date().toISOString(),
+          chief_complaint: row[2] || 'General consultation',
+          vitals: this.parseVitals(row[3]),
+          provider_name: row[4] || 'Dr. Smith',
+          encounter_type: 'Outpatient',
+          status: 'Completed',
+          diagnosis: [],
+          notes: ''
+        }));
+        
+        console.log(`Found ${encounters.length} encounters for EHR ${ehrId}`);
+        return encounters;
+      }
+      
+      return [];
+    } catch (error) {
+      console.error('Error getting patient encounters:', error);
+      return [];
+    }
+  }
+
+  // Helper method to parse vitals from AQL result
+  private parseVitals(vitalsData: any): any {
+    if (!vitalsData || !Array.isArray(vitalsData)) {
+      return {};
+    }
+
+    const vitals: any = {};
+    for (const vital of vitalsData) {
+      if (vital && vital.name && vital.value) {
+        const name = vital.name.value.toLowerCase();
+        const value = vital.value.magnitude || vital.value.value || vital.value;
+        
+        if (name.includes('blood pressure')) {
+          vitals.blood_pressure = `${value}`;
+        } else if (name.includes('heart rate')) {
+          vitals.heart_rate = `${value}`;
+        } else if (name.includes('temperature')) {
+          vitals.temperature = `${value}°F`;
+        } else if (name.includes('oxygen')) {
+          vitals.oxygen_saturation = `${value}%`;
+        }
+      }
+    }
+    
+    return vitals;
   }
 }
 
