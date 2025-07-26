@@ -100,6 +100,14 @@ function TabPanel(props: TabPanelProps) {
 let renderCount = 0;
 
 function PatientRecordsPage() {
+  renderCount++;
+  console.log(`PatientRecordsPage component rendering... (render #${renderCount})`);
+  
+  if (renderCount > 50) {
+    console.error('INFINITE RENDER LOOP DETECTED! Stopping after 50 renders');
+    return <div>Error: Infinite render loop detected</div>;
+  }
+  
   const navigate = useNavigate();
   const { setSelectedPatient: setContextPatient, setSelectedEncounter: setContextEncounter, setRecentVitals } = usePatient();
   
