@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.core.config import settings
-from app.api import auth, patients, encounters, transcriptions, websocket, ehr_integration, epic_auth, ehrbase, ehrbase_local, openehr, enhanced_websocket
+from app.api import auth, patients, encounters, transcriptions, websocket, ehr_integration, epic_auth, ehrbase, ehrbase_local, openehr, enhanced_websocket, agent_websocket
 from app.db.session import engine, Base
 
 # Configure logging
@@ -53,6 +53,7 @@ app.include_router(ehrbase.router, prefix="/api/ehrbase/proxy", tags=["ehrbase"]
 app.include_router(ehrbase_local.router, prefix="/api/ehrbase-local", tags=["ehrbase-local"])
 app.include_router(openehr.router, prefix="/api", tags=["openehr"])
 app.include_router(enhanced_websocket.router, prefix="/api/v1/ws", tags=["enhanced-websocket"])
+app.include_router(agent_websocket.router, prefix="/api/v2", tags=["agent-websocket"])
 
 
 @app.get("/")
