@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.core.config import settings
-from app.api import auth, patients, encounters, transcriptions, websocket, ehr_integration, epic_auth, ehrbase, ehrbase_local, openehr, enhanced_websocket, agent_websocket
+from app.api import auth, patients, encounters, transcriptions, websocket, ehr_integration, epic_auth, ehrbase, ehrbase_local, openehr, enhanced_websocket, agent_websocket, batch_transcription, streaming_transcription
 from app.db.session import engine, Base
 
 # Configure logging
@@ -21,9 +21,22 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up Medical Scribe application...")
     # Create database tables
     Base.metadata.create_all(bind=engine)
+    
+    # Initialize the medical scribe supervisors
+    from app.agents.batch_medical_scribe_supervisor import get_medical_scribe_supervisor
+    from app.agents.streaming_medical_scribe_supervisor import get_streaming_supervisor
+    
+    batch_supervisor = get_medical_scribe_supervisor()
+    streaming_supervisor = get_streaming_supervisor()
+    
     yield
+    
     # Shutdown
     logger.info("Shutting down Medical Scribe application...")
+    
+    # Shutdown supervisors
+    await batch_supervisor.shutdown()
+    await streaming_supervisor.shutdown()
 
 
 app = FastAPI(
@@ -54,6 +67,8 @@ app.include_router(ehrbase_local.router, prefix="/api/ehrbase-local", tags=["ehr
 app.include_router(openehr.router, prefix="/api", tags=["openehr"])
 app.include_router(enhanced_websocket.router, prefix="/api/v1/ws", tags=["enhanced-websocket"])
 app.include_router(agent_websocket.router, prefix="/api/v2", tags=["agent-websocket"])
+app.include_router(batch_transcription.router, prefix="/api/v1/transcription", tags=["batch-transcription"])
+app.include_router(streaming_transcription.router, prefix="/api/v1/streaming", tags=["streaming-transcription"])
 
 
 @app.get("/")
