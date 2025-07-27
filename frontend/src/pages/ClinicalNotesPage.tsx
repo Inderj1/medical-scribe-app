@@ -3,7 +3,7 @@ import { Box, Grid, Alert, Button, CircularProgress, Backdrop, Typography } from
 import { useNavigate } from 'react-router-dom';
 import PatientHeader from '../components/ClinicalNotes/PatientHeader';
 import ClinicalDocumentationSplit from '../components/ClinicalNotes/ClinicalDocumentationSplit';
-import LiveTranscription from '../components/ClinicalNotes/LiveTranscription';
+import RealtimeTranscription from '../components/ClinicalNotes/RealtimeTranscription';
 import ActionBar from '../components/ClinicalNotes/ActionBar';
 import webSocketService from '../services/websocket';
 import { usePatient } from '../contexts/PatientContext';
@@ -364,9 +364,10 @@ function ClinicalNotesPage() {
                 flexDirection: 'column',
                 gap: 2
               }}>
-                <LiveTranscription 
+                <RealtimeTranscription 
                   encounterId={encounter.id}
-                  onAddToSection={handleAddToSection}
+                  patientId={patient.id}
+                  onTranscriptionUpdate={handleAddToSection}
                   onCollapsedChange={setIsSidebarCollapsed}
                   isCollapsed={isSidebarCollapsed}
                 />
@@ -379,9 +380,10 @@ function ClinicalNotesPage() {
                 width: 60,
                 height: '100%'
               }}>
-                <LiveTranscription 
+                <RealtimeTranscription 
                   encounterId={encounter.id}
-                  onAddToSection={handleAddToSection}
+                  patientId={patient.id}
+                  onTranscriptionUpdate={handleAddToSection}
                   onCollapsedChange={setIsSidebarCollapsed}
                   isCollapsed={isSidebarCollapsed}
                 />

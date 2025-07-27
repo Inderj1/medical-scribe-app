@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     AUDIO_CHUNK_SIZE: int = 4096
     WHISPER_MODEL: str = "whisper-1"
     
+    # OpenAI Realtime API Configuration
+    OPENAI_REALTIME_MODEL: str = "gpt-4o-realtime-preview"
+    ENABLE_INPUT_TRANSCRIPTION: bool = True
+    ENABLE_FUNCTION_CALLING: bool = True
+    AUDIO_SAMPLE_RATE: int = 24000
+    AUDIO_CHANNELS: int = 1
+    AUDIO_FORMAT: str = "pcm16"
+    
     # WebSocket
     WS_HEARTBEAT_INTERVAL: int = 30
     WS_MAX_CONNECTIONS_PER_USER: int = 5

@@ -7,9 +7,13 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 import base64
 
-from agents import Agent, tool, Handoff, GuardFunction
+from agents import Agent, function_tool, Handoff
 from openai import AsyncOpenAI
 from app.core.config import settings
+from app.agents.transcription_models import (
+    SessionStatus, AudioProcessingResult, SessionEndResult,
+    MedicalEntity, ClinicalAnalysis
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +139,8 @@ transcription_agent = Agent(
 realtime_client = None
 
 
-@tool
-async def start_transcription_session(encounter_id: str, patient_id: str) -> Dict[str, Any]:
+@function_tool
+async def start_transcription_session(encounter_id: str, patient_id: str) -> SessionStatus:
     """Start a new transcription session"""
     global realtime_client
     
@@ -146,34 +150,34 @@ async def start_transcription_session(encounter_id: str, patient_id: str) -> Dic
     if not realtime_client.is_connected:
         await realtime_client.connect()
         
-    return {
-        "status": "connected",
-        "encounter_id": encounter_id,
-        "patient_id": patient_id,
-        "session_started": datetime.utcnow().isoformat()
-    }
+    return SessionStatus(
+        status="connected",
+        encounter_id=encounter_id,
+        patient_id=patient_id,
+        session_started=datetime.utcnow().isoformat()
+    )
 
 
-@tool
-async def process_audio_stream(audio_data: str) -> Dict[str, Any]:
+@function_tool
+async def process_audio_stream(audio_data: str) -> AudioProcessingResult:
     """Process incoming audio stream data (base64 encoded)"""
     global realtime_client
     
     if not realtime_client or not realtime_client.is_connected:
-        return {"error": "Not connected to transcription service"}
+        return AudioProcessingResult(error="Not connected to transcription service", status="error", bytes=0)
         
     # Decode and send audio
     try:
         audio_bytes = base64.b64decode(audio_data)
         await realtime_client.send_audio(audio_bytes)
-        return {"status": "audio_processed", "bytes": len(audio_bytes)}
+        return AudioProcessingResult(status="audio_processed", bytes=len(audio_bytes))
     except Exception as e:
         logger.error(f"Audio processing error: {e}")
-        return {"error": str(e)}
+        return AudioProcessingResult(error=str(e), status="error", bytes=0)
 
 
-@tool
-async def end_transcription_session() -> Dict[str, Any]:
+@function_tool
+async def end_transcription_session() -> SessionEndResult:
     """End the current transcription session"""
     global realtime_client
     
@@ -181,21 +185,16 @@ async def end_transcription_session() -> Dict[str, Any]:
         await realtime_client.disconnect()
         realtime_client = None
         
-    return {"status": "disconnected", "session_ended": datetime.utcnow().isoformat()}
+    return SessionEndResult(status="disconnected", session_ended=datetime.utcnow().isoformat())
 
 
-# Create handoff to clinical analysis
-clinical_handoff = Handoff(
-    to="ClinicalAnalysisAgent",
-    description="Hand off transcribed text for clinical analysis and entity extraction"
-)
+# We'll define the handoff function later
 
 # Add tools to agent
 transcription_agent.tools = [
     start_transcription_session,
     process_audio_stream,
-    end_transcription_session,
-    clinical_handoff
+    end_transcription_session
 ]
 
 
@@ -219,8 +218,8 @@ clinical_analysis_agent = Agent(
 )
 
 
-@tool
-async def analyze_transcription(text: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+@function_tool
+async def analyze_transcription(text: str) -> ClinicalAnalysis:
     """Analyze transcribed text for medical content"""
     
     # Use OpenAI to analyze the text
@@ -249,15 +248,21 @@ async def analyze_transcription(text: str, context: Optional[Dict[str, Any]] = N
     
     analysis = json.loads(response.choices[0].message.content)
     
-    return {
-        "text": text,
-        "analysis": analysis,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    return ClinicalAnalysis(
+        text=text,
+        chief_complaint=analysis.get("chief_complaint"),
+        symptoms=analysis.get("symptoms"),
+        medications=analysis.get("medications"),
+        vital_signs=analysis.get("vital_signs"),
+        physical_exam=analysis.get("physical_exam"),
+        assessment=analysis.get("assessment"),
+        plan=analysis.get("plan"),
+        timestamp=datetime.utcnow().isoformat()
+    )
 
 
-@tool
-async def extract_medical_entities(text: str) -> List[Dict[str, Any]]:
+@function_tool
+async def extract_medical_entities(text: str) -> List[MedicalEntity]:
     """Extract specific medical entities from text"""
     entities = []
     
@@ -268,36 +273,30 @@ async def extract_medical_entities(text: str) -> List[Dict[str, Any]]:
     # Medication patterns
     med_pattern = r'\b(\w+)\s+(\d+)\s*(mg|mcg|ml|units?)\b'
     for match in re.finditer(med_pattern, text, re.IGNORECASE):
-        entities.append({
-            "type": "medication",
-            "name": match.group(1),
-            "dose": match.group(2),
-            "unit": match.group(3)
-        })
+        entities.append(MedicalEntity(
+            type="medication",
+            name=match.group(1),
+            dose=match.group(2),
+            unit=match.group(3)
+        ))
         
     # Vital signs patterns
     bp_pattern = r'\b(\d{2,3})/(\d{2,3})\b'
     for match in re.finditer(bp_pattern, text):
-        entities.append({
-            "type": "vital_sign",
-            "name": "blood_pressure",
-            "systolic": match.group(1),
-            "diastolic": match.group(2)
-        })
+        entities.append(MedicalEntity(
+            type="vital_sign",
+            name="blood_pressure",
+            systolic=match.group(1),
+            diastolic=match.group(2)
+        ))
         
     return entities
 
 
-# Handoff to note formatting
-note_formatting_handoff = Handoff(
-    to="NoteFormattingAgent",
-    description="Hand off analyzed clinical data for note formatting"
-)
-
+# Add tools to clinical analysis agent
 clinical_analysis_agent.tools = [
     analyze_transcription,
-    extract_medical_entities,
-    note_formatting_handoff
+    extract_medical_entities
 ]
 
 
@@ -313,9 +312,9 @@ note_formatting_agent = Agent(
 )
 
 
-@tool
+@function_tool
 async def format_clinical_note(
-    analysis: Dict[str, Any],
+    analysis: dict,
     format_type: str = "soap"
 ) -> str:
     """Format analyzed data into a clinical note"""
