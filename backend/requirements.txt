@@ -8,11 +8,11 @@ alembic==1.12.1
 psycopg2-binary==2.9.9
 redis==5.0.1
 celery==5.3.4
-pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic>=2.10.0
+pydantic-settings>=2.5.0
 python-dotenv==1.0.0
 httpx==0.25.1
-openai>=1.12.0
+openai>=1.96.1
 anthropic>=0.7.0
 aiohttp==3.9.1
 spacy==3.7.2
@@ -31,5 +31,4 @@ pytest-asyncio==0.21.1
 black==23.11.0
 flake8==6.1.0
 mypy==1.7.0
-openai-agents>=0.1.0
 aiortc>=1.6.0

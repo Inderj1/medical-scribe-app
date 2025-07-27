@@ -156,6 +156,14 @@ setup_python_env() {
     # Activate virtual environment
     source venv/bin/activate
     
+    # Verify virtual environment is active
+    if [[ "$VIRTUAL_ENV" == "" ]]; then
+        print_error "Failed to activate virtual environment"
+        exit 1
+    fi
+    
+    print_success "Virtual environment activated: $(which python)"
+    
     # Upgrade pip
     print_status "Upgrading pip..."
     pip install --upgrade pip >/dev/null 2>&1
@@ -163,6 +171,10 @@ setup_python_env() {
     # Install requirements
     print_status "Installing Python dependencies..."
     pip install -r requirements.txt
+    
+    # Install agent dependencies
+    print_status "Installing OpenAI Agents SDK..."
+    pip install openai-agents >/dev/null 2>&1 || print_warning "OpenAI Agents SDK already installed"
     
     print_success "Python environment ready"
     cd ..
@@ -302,14 +314,30 @@ start_backend() {
     print_status "Starting backend server..."
     
     cd backend
-    source venv/bin/activate
+    
+    # Ensure virtual environment is activated
+    if [ -d "venv" ]; then
+        source venv/bin/activate
+    else
+        print_error "Virtual environment not found. Run setup first."
+        exit 1
+    fi
+    
+    # Verify activation
+    if [[ "$VIRTUAL_ENV" == "" ]]; then
+        print_error "Virtual environment not activated"
+        exit 1
+    fi
+    
+    # Export environment for agent system
+    export PYTHONPATH="$PWD:$PYTHONPATH"
     
     # Start uvicorn in background
     uvicorn app.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT > ../logs/backend.log 2>&1 &
     BACKEND_PID=$!
     
     cd ..
-    print_success "Backend started (PID: $BACKEND_PID)"
+    print_success "Backend started with venv (PID: $BACKEND_PID)"
     echo $BACKEND_PID > .backend.pid
 }
 
@@ -318,6 +346,18 @@ start_frontend() {
     print_status "Starting frontend server..."
     
     cd frontend
+    
+    # Clear build cache if exists
+    if [ -d "build" ]; then
+        print_status "Clearing build cache..."
+        rm -rf build
+    fi
+    
+    # Clear node modules cache
+    if [ -d "node_modules/.cache" ]; then
+        print_status "Clearing node modules cache..."
+        rm -rf node_modules/.cache
+    fi
     
     # Check if HTTPS certificates exist
     if [ -f "certificates/localhost.crt" ] && [ -f "certificates/localhost.key" ]; then
@@ -355,6 +395,13 @@ wait_for_services() {
         print_error "Backend failed to start"
         cleanup
         exit 1
+    fi
+    
+    # Test agent system
+    if curl -s http://localhost:$BACKEND_PORT/api/v2/agent/status >/dev/null 2>&1; then
+        print_success "Agent system is ready"
+    else
+        print_warning "Agent system endpoint not responding"
     fi
 }
 
@@ -394,6 +441,7 @@ show_status() {
     echo -e "  ${BLUE}Frontend:${NC}        http://localhost:$FRONTEND_PORT"
     echo -e "  ${BLUE}API Docs:${NC}        http://localhost:$BACKEND_PORT/docs"
     echo -e "  ${BLUE}Health Check:${NC}    http://localhost:$BACKEND_PORT/health"
+    echo -e "  ${BLUE}Agent Status:${NC}    http://localhost:$BACKEND_PORT/api/v2/agent/status"
     echo ""
     echo -e "  ${YELLOW}Logs:${NC}"
     echo -e "    Backend:  tail -f logs/backend.log"
@@ -408,34 +456,118 @@ show_status() {
     fi
 }
 
-# Main execution
-main() {
-    print_banner
+# Test agent system
+test_agents() {
+    print_status "Testing agent system..."
     
-    # Create logs directory
-    mkdir -p logs
+    cd backend
     
-    # Run all setup steps
-    check_requirements
-    stop_existing_services
-    setup_env_files
-    setup_databases
-    setup_python_env
-    setup_node_env
-    run_migrations
-    start_backend
-    start_frontend
-    wait_for_services
-    show_status
+    # Ensure virtual environment is activated
+    if [ -d "venv" ]; then
+        source venv/bin/activate
+    else
+        print_error "Virtual environment not found"
+        return 1
+    fi
     
-    # Keep script running
-    print_status "Press Ctrl+C to stop all services..."
+    # Run agent tests
+    if [ -f "app/agents/simple_transcription_agent.py" ]; then
+        print_status "Running simple agent test..."
+        python app/agents/simple_transcription_agent.py
+    else
+        print_warning "Agent test file not found"
+    fi
     
-    # Wait indefinitely
-    while true; do
-        sleep 1
-    done
+    cd ..
 }
 
-# Run main function
-main
+# Show help
+show_help() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --help, -h        Show this help message"
+    echo "  --quick, -q       Quick start (skip dependency updates)"
+    echo "  --test-agents     Test the agent system"
+    echo "  --backend-only    Start only the backend server"
+    echo "  --frontend-only   Start only the frontend server"
+    echo ""
+    echo "Examples:"
+    echo "  $0                Full setup and start"
+    echo "  $0 --quick        Quick start without updates"
+    echo "  $0 --test-agents  Test agent functionality"
+}
+
+# Main execution
+main() {
+    # Parse command line arguments
+    case "$1" in
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        --test-agents)
+            print_banner
+            test_agents
+            exit 0
+            ;;
+        --backend-only)
+            print_banner
+            mkdir -p logs
+            stop_existing_services
+            setup_python_env
+            start_backend
+            wait_for_services
+            show_status
+            ;;
+        --frontend-only)
+            print_banner
+            mkdir -p logs
+            kill_port $FRONTEND_PORT
+            setup_node_env
+            start_frontend
+            show_status
+            ;;
+        --quick|-q)
+            print_banner
+            mkdir -p logs
+            print_status "Quick start mode - skipping dependency updates"
+            stop_existing_services
+            start_backend
+            start_frontend
+            wait_for_services
+            show_status
+            ;;
+        *)
+            print_banner
+            # Create logs directory
+            mkdir -p logs
+            
+            # Run all setup steps
+            check_requirements
+            stop_existing_services
+            setup_env_files
+            setup_databases
+            setup_python_env
+            setup_node_env
+            run_migrations
+            start_backend
+            start_frontend
+            wait_for_services
+            show_status
+            ;;
+    esac
+    
+    # Keep script running (except for test-agents)
+    if [[ "$1" != "--test-agents" ]]; then
+        print_status "Press Ctrl+C to stop all services..."
+        
+        # Wait indefinitely
+        while true; do
+            sleep 1
+        done
+    fi
+}
+
+# Run main function with all arguments
+main "$@"
