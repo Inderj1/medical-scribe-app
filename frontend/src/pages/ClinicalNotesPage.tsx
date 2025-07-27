@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, Grid, Alert, Button, CircularProgress, Backdrop, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import PatientHeader from '../components/ClinicalNotes/PatientHeader';
-import ClinicalDocumentationSplit from '../components/ClinicalNotes/ClinicalDocumentationSplit';
+import ClinicalDocumentationClean from '../components/ClinicalNotes/ClinicalDocumentationClean';
 import RealtimeTranscription from '../components/ClinicalNotes/RealtimeTranscription';
 import ActionBar from '../components/ClinicalNotes/ActionBar';
 import webSocketService from '../services/websocket';
@@ -396,7 +396,7 @@ function ClinicalNotesPage() {
               height: '100%',
               overflow: 'hidden'
             }}>
-              <ClinicalDocumentationSplit 
+              <ClinicalDocumentationClean 
                 encounterId={encounter.id}
                 patientId={patient.ehr_id || patient.id || '123'}
                 onAddToSection={handleAddToSection}
