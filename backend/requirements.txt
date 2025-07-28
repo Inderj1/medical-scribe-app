@@ -13,6 +13,7 @@ pydantic-settings>=2.5.0
 python-dotenv==1.0.0
 httpx==0.25.1
 openai>=1.96.1
+swarm-agent>=0.1.0
 anthropic>=0.7.0
 aiohttp==3.9.1
 spacy==3.7.2
