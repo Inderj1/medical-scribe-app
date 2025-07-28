@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 import base64
 
-from agents import Agent, function_tool, Handoff
+from swarm import Agent
 from openai import AsyncOpenAI
 from app.core.config import settings
 from app.agents.transcription_models import (
@@ -139,7 +139,7 @@ transcription_agent = Agent(
 realtime_client = None
 
 
-@function_tool
+# Function for agent
 async def start_transcription_session(encounter_id: str, patient_id: str) -> SessionStatus:
     """Start a new transcription session"""
     global realtime_client
@@ -158,7 +158,7 @@ async def start_transcription_session(encounter_id: str, patient_id: str) -> Ses
     )
 
 
-@function_tool
+# Function for agent
 async def process_audio_stream(audio_data: str) -> AudioProcessingResult:
     """Process incoming audio stream data (base64 encoded)"""
     global realtime_client
@@ -176,7 +176,7 @@ async def process_audio_stream(audio_data: str) -> AudioProcessingResult:
         return AudioProcessingResult(error=str(e), status="error", bytes=0)
 
 
-@function_tool
+# Function for agent
 async def end_transcription_session() -> SessionEndResult:
     """End the current transcription session"""
     global realtime_client
@@ -190,12 +190,16 @@ async def end_transcription_session() -> SessionEndResult:
 
 # We'll define the handoff function later
 
-# Add tools to agent
-transcription_agent.tools = [
-    start_transcription_session,
-    process_audio_stream,
-    end_transcription_session
-]
+# Recreate agent with functions
+transcription_agent = Agent(
+    name="TranscriptionAgent",
+    instructions=transcription_agent.instructions,
+    functions=[
+        start_transcription_session,
+        process_audio_stream,
+        end_transcription_session
+    ]
+)
 
 
 # Create the clinical analysis agent
@@ -218,7 +222,7 @@ clinical_analysis_agent = Agent(
 )
 
 
-@function_tool
+# Function for agent
 async def analyze_transcription(text: str) -> ClinicalAnalysis:
     """Analyze transcribed text for medical content"""
     
@@ -261,7 +265,7 @@ async def analyze_transcription(text: str) -> ClinicalAnalysis:
     )
 
 
-@function_tool
+# Function for agent
 async def extract_medical_entities(text: str) -> List[MedicalEntity]:
     """Extract specific medical entities from text"""
     entities = []
@@ -293,11 +297,15 @@ async def extract_medical_entities(text: str) -> List[MedicalEntity]:
     return entities
 
 
-# Add tools to clinical analysis agent
-clinical_analysis_agent.tools = [
-    analyze_transcription,
-    extract_medical_entities
-]
+# Recreate clinical analysis agent with functions
+clinical_analysis_agent = Agent(
+    name="ClinicalAnalysisAgent",
+    instructions=clinical_analysis_agent.instructions,
+    functions=[
+        analyze_transcription,
+        extract_medical_entities
+    ]
+)
 
 
 # Create the note formatting agent
@@ -312,7 +320,7 @@ note_formatting_agent = Agent(
 )
 
 
-@function_tool
+# Function for agent
 async def format_clinical_note(
     analysis: dict,
     format_type: str = "soap"
@@ -361,7 +369,12 @@ async def format_clinical_note(
         return json.dumps(analysis, indent=2)
 
 
-note_formatting_agent.tools = [format_clinical_note]
+# Recreate note formatting agent with functions
+note_formatting_agent = Agent(
+    name="NoteFormattingAgent",
+    instructions=note_formatting_agent.instructions,
+    functions=[format_clinical_note]
+)
 
 
 # Export agents

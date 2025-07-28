@@ -2,7 +2,7 @@
 import os
 import logging
 import tempfile
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session

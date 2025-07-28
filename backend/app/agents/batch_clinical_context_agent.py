@@ -7,7 +7,7 @@ from datetime import datetime
 import re
 
 from app.agents.base import BaseAgent, AgentMessage, AgentHandoff
-from app.services.clinical_nlp import ClinicalNLP
+from app.services.clinical_nlp import ClinicalNLPService
 from openai import AsyncOpenAI
 from app.core.config import settings
 
@@ -23,7 +23,7 @@ class BatchClinicalContextAgent(BaseAgent):
             description="Extracts medical entities and clinical context from transcriptions"
         )
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        self.clinical_nlp = ClinicalNLP()
+        self.clinical_nlp = ClinicalNLPService()
         
         # Medical entity patterns
         self._init_medical_patterns()

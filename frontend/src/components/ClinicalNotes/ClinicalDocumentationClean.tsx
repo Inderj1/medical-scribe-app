@@ -464,7 +464,7 @@ const ClinicalDocumentationClean: React.FC<ClinicalDocumentationCleanProps> = ({
       <NoteSettings
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        currentFormat={noteFormat}
+        noteFormat={noteFormat}
         onFormatChange={handleNoteFormatChange}
       />
     </Box>

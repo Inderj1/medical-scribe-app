@@ -24,7 +24,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import PatientHeader from '../components/ClinicalNotes/PatientHeader';
 import ClinicalDocumentationClean from '../components/ClinicalNotes/ClinicalDocumentationClean';
-import RealtimeTranscriptionWrapper from '../components/ClinicalNotes/RealtimeTranscriptionWrapper';
+import RealtimeTranscription from '../components/ClinicalNotes/RealtimeTranscription';
 import ActionBar from '../components/ClinicalNotes/ActionBar';
 import webSocketService from '../services/websocket';
 import { usePatient } from '../contexts/PatientContext';
@@ -49,7 +49,7 @@ interface PatientData {
   gender: string;
   age?: number;
   smoking_history?: string;
-  allergies?: string;
+  allergies?: string | any[];
   phone?: string;
   email?: string;
   // Additional clinical context from recent encounters

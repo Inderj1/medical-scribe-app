@@ -10,12 +10,25 @@ interface Patient {
   phone?: string;
   email?: string;
   age?: number;
-  allergies?: string;
+  allergies?: string | any[];
   smoking_history?: string;
   // Additional clinical context from recent encounters
   recent_diagnosis?: string[];
   recent_chief_complaint?: string;
   recent_clinical_notes?: string;
+  // Additional fields for clinical documentation
+  medications?: any[];
+  past_medical_history?: string[];
+  social_history?: string;
+  family_history?: string[];
+  vital_signs?: any;
+  physical_examination?: any;
+  lab_results?: any[];
+  imaging_results?: any[];
+  id?: string;
+  medical_summary?: any;
+  history_present_illness?: any;
+  active_problems?: any[];
 }
 
 interface Encounter {

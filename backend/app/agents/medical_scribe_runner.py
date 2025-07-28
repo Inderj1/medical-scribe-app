@@ -4,7 +4,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from agents import Runner, Session
+from swarm import Swarm, Agent
 from fastapi import WebSocket, WebSocketDisconnect
 import json
 
@@ -29,8 +29,11 @@ class MedicalScribeRunner:
             note_formatting_agent
         ]
         
+        # Swarm client
+        self.swarm = Swarm()
+        
         # Session storage for multiple concurrent users
-        self.sessions: Dict[str, Session] = {}
+        self.sessions: Dict[str, Dict[str, Any]] = {}
         
         # WebSocket connections
         self.connections: Dict[str, WebSocket] = {}
@@ -53,17 +56,16 @@ class MedicalScribeRunner:
                     })
                 else:
                     # Run through clinical analysis for complete transcriptions
-                    result = await Runner.run(
-                        clinical_analysis_agent,
-                        f"Analyze this medical transcription: {text}",
-                        session=session
+                    result = self.swarm.run(
+                        agent=clinical_analysis_agent,
+                        messages=[{"role": "user", "content": f"Analyze this medical transcription: {text}"}]
                     )
                     
                     # Send analysis to client
                     await self._send_to_client(session_id, {
                         "type": "transcription:complete",
                         "text": text,
-                        "analysis": result.final_output,
+                        "analysis": result.messages[-1].content if result.messages else "",
                         "timestamp": datetime.utcnow().isoformat()
                     })
                     
@@ -83,7 +85,7 @@ class MedicalScribeRunner:
         session_id = f"{user_id}_{datetime.utcnow().timestamp()}"
         
         # Create new session for this user
-        session = Session()
+        session = {"messages": [], "context": {}}
         self.sessions[session_id] = session
         self.connections[session_id] = websocket
         
@@ -102,7 +104,7 @@ class MedicalScribeRunner:
         self,
         websocket: WebSocket,
         session_id: str,
-        session: Session
+        session: Dict[str, Any]
     ):
         """Handle incoming messages from client"""
         while True:
@@ -126,7 +128,7 @@ class MedicalScribeRunner:
     async def _process_client_message(
         self,
         session_id: str,
-        session: Session,
+        session: Dict[str, Any],
         data: Dict[str, Any]
     ):
         """Process text message from client"""
@@ -137,10 +139,9 @@ class MedicalScribeRunner:
             encounter_id = data.get("encounter_id")
             patient_id = data.get("patient_id")
             
-            result = await Runner.run(
-                transcription_agent,
-                f"Start transcription session for encounter {encounter_id} and patient {patient_id}",
-                session=session
+            result = self.swarm.run(
+                agent=transcription_agent,
+                messages=session["messages"] + [{"role": "user", "content": f"Start transcription session for encounter {encounter_id} and patient {patient_id}"}]
             )
             
             await self._send_to_client(session_id, {
@@ -152,10 +153,9 @@ class MedicalScribeRunner:
             
         elif msg_type == "encounter:end":
             # End transcription session
-            result = await Runner.run(
-                transcription_agent,
-                "End the current transcription session",
-                session=session
+            result = self.swarm.run(
+                agent=transcription_agent,
+                messages=session["messages"] + [{"role": "user", "content": "End the current transcription session"}]
             )
             
             await self._send_to_client(session_id, {
@@ -174,7 +174,7 @@ class MedicalScribeRunner:
     async def _process_audio_data(
         self,
         session_id: str,
-        session: Session,
+        session: Dict[str, Any],
         audio_data: bytes
     ):
         """Process raw audio data from client"""
@@ -183,10 +183,9 @@ class MedicalScribeRunner:
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
         
         # Process through transcription agent
-        await Runner.run(
-            transcription_agent,
-            f"Process this audio stream: {audio_base64[:50]}...",  # Truncated for logging
-            session=session
+        self.swarm.run(
+            agent=transcription_agent,
+            messages=session["messages"] + [{"role": "user", "content": f"Process this audio stream: {audio_base64[:50]}..."}]  # Truncated for logging
         )
         
     async def _send_to_client(self, session_id: str, data: Dict[str, Any]):
@@ -203,10 +202,9 @@ class MedicalScribeRunner:
         # End transcription if active
         if session_id in self.sessions:
             session = self.sessions[session_id]
-            await Runner.run(
-                transcription_agent,
-                "End the current transcription session",
-                session=session
+            self.swarm.run(
+                agent=transcription_agent,
+                messages=session["messages"] + [{"role": "user", "content": "End the current transcription session"}]
             )
             del self.sessions[session_id]
             
