@@ -1,39 +1,29 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import uuid
-import enum
+from datetime import datetime
 
-from app.db.session import Base
-
-
-class EncounterStatus(str, enum.Enum):
-    ACTIVE = "active"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    SIGNED = "signed"
-    CANCELLED = "cancelled"
+from app.db.base import Base
 
 
 class Encounter(Base):
     __tablename__ = "encounters"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id"), nullable=False)
-    encounter_date = Column(DateTime(timezone=True), server_default=func.now())
+    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id", ondelete="CASCADE"))
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    ehr_encounter_id = Column(String)
     chief_complaint = Column(Text)
-    status = Column(Enum(EncounterStatus), default=EncounterStatus.ACTIVE)
-    provider_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    location = Column(String(100))
-    encounter_type = Column(String(50))  # "new_patient", "follow_up", "urgent", etc.
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    signed_at = Column(DateTime(timezone=True))
+    encounter_date = Column(DateTime, default=datetime.utcnow)
+    encounter_type = Column(String)  # office_visit, emergency, telehealth
+    status = Column(String, default="active")  # active, completed, cancelled
+    provider_name = Column(String)
+    location = Column(String)
+    extra_metadata = Column(JSONB)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     patient = relationship("Patient", backref="encounters")
-    provider = relationship("User", backref="encounters")
-    transcriptions = relationship("Transcription", back_populates="encounter", cascade="all, delete-orphan")
-    clinical_notes = relationship("ClinicalNote", back_populates="encounter", cascade="all, delete-orphan")
-    vitals = relationship("Vitals", back_populates="encounter", cascade="all, delete-orphan")
+    user = relationship("User", backref="encounters")

@@ -2,7 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 const EHRBASE_PROXY_URL = `${API_BASE_URL}/api/ehrbase/proxy`;
-const EHR_DIRECT_URL = 'http://98.86.40.56';
+const EHR_DIRECT_URL = 'http://3.223.44.85';
 
 interface EHRData {
   ehr_id: {
@@ -219,6 +219,80 @@ class EHRBaseAPI {
       }
     );
     return response.data;
+  }
+
+  // ==================== NEW MEDICAL RECORD EXTRACTION ENDPOINTS ====================
+
+  // Get patient records using the new API
+  async getPatientRecords(patientId: string): Promise<any> {
+    try {
+      const response = await axios.get(`${EHR_DIRECT_URL}/api/patients/${patientId}/records`);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get patient records:', error);
+      throw error;
+    }
+  }
+
+  // Get specific record by ID
+  async getRecord(recordId: string): Promise<any> {
+    try {
+      const response = await axios.get(`${EHR_DIRECT_URL}/api/records/${recordId}`);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get record:', error);
+      throw error;
+    }
+  }
+
+  // Get specific section of a record
+  async getRecordSection(recordId: string, section: 'history' | 'examination' | 'assessment' | 'plan'): Promise<any> {
+    try {
+      const response = await axios.get(`${EHR_DIRECT_URL}/api/records/${recordId}/sections/${section}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Failed to get ${section} section:`, error);
+      throw error;
+    }
+  }
+
+  // Get patient summary
+  async getPatientSummary(patientId: string): Promise<any> {
+    try {
+      const response = await axios.get(`${EHR_DIRECT_URL}/api/summary/${patientId}`);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get patient summary:', error);
+      throw error;
+    }
+  }
+
+  // Direct OpenEHR API access for compositions
+  async getCompositions(ehrId: string): Promise<any> {
+    try {
+      const response = await axios.get(`${EHR_DIRECT_URL}/ehrbase/rest/openehr/v1/ehr/${ehrId}/composition`);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get compositions:', error);
+      throw error;
+    }
+  }
+
+  // Execute complex AQL queries directly on EHRBase
+  async executeComplexAQL(query: string): Promise<any> {
+    try {
+      const response = await axios.post(`${EHR_DIRECT_URL}/ehrbase/rest/openehr/v1/query/aql`, {
+        q: query
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Failed to execute AQL query:', error);
+      throw error;
+    }
   }
 
   // ==================== HELPER FUNCTIONS ====================

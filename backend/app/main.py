@@ -1,11 +1,13 @@
+"""Main FastAPI application with agent-based medical scribe"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 
 from app.core.config import settings
-from app.api import auth, patients, encounters, transcriptions, websocket, ehr_integration, epic_auth, ehrbase, ehrbase_local, openehr, enhanced_websocket, agent_websocket, batch_transcription, streaming_transcription, swarm_api
-from app.db.session import engine, Base
+from app.api.v1 import auth, patients, encounters, transcription, sse, ehrbase, streaming
+from app.db.base_class import Base  # This imports all models
+from app.db.session import engine
 
 # Configure logging
 logging.basicConfig(
@@ -17,78 +19,119 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Manage application lifecycle"""
     # Startup
-    logger.info("Starting up Medical Scribe application...")
+    logger.info("Starting Medical Scribe API with Agent Architecture...")
+    
     # Create database tables
     Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created/verified")
     
-    # Initialize the medical scribe supervisors
-    from app.agents.batch_medical_scribe_supervisor import get_medical_scribe_supervisor
-    from app.agents.streaming_medical_scribe_supervisor import get_streaming_supervisor
-    from app.agents.swarm_supervisor import get_swarm_supervisor
-    
-    batch_supervisor = get_medical_scribe_supervisor()
-    streaming_supervisor = get_streaming_supervisor()
-    swarm_supervisor = get_swarm_supervisor()
+    # Initialize agent system
+    from app.agents.medical_scribe_supervisor import medical_scribe_supervisor
+    logger.info("Agent system initialized")
     
     yield
     
     # Shutdown
-    logger.info("Shutting down Medical Scribe application...")
+    logger.info("Shutting down Medical Scribe API...")
     
-    # Shutdown supervisors
-    await batch_supervisor.shutdown()
-    await streaming_supervisor.shutdown()
+    # Cleanup
+    from app.services.ehrbase.client import EHRBaseClient
+    client = EHRBaseClient()
+    await client.close()
 
 
+# Create FastAPI app
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    lifespan=lifespan
+    lifespan=lifespan,
+    description="Medical Scribe API with OpenAI Swarm Agent Architecture"
 )
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(patients.router, prefix="/api/patients", tags=["patients"])
-app.include_router(encounters.router, prefix="/api/encounters", tags=["encounters"])
-app.include_router(transcriptions.router, prefix="/api/transcriptions", tags=["transcriptions"])
-app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
-app.include_router(ehr_integration.router, prefix="/api/ehr", tags=["ehr"])
-app.include_router(epic_auth.router, prefix="/api/auth", tags=["epic-auth"])
-app.include_router(ehrbase.router, prefix="/api/ehrbase/proxy", tags=["ehrbase"])
-app.include_router(ehrbase_local.router, prefix="/api/ehrbase-local", tags=["ehrbase-local"])
-app.include_router(openehr.router, prefix="/api", tags=["openehr"])
-app.include_router(enhanced_websocket.router, prefix="/api/v1/ws", tags=["enhanced-websocket"])
-app.include_router(agent_websocket.router, prefix="/api/v2", tags=["agent-websocket"])
-app.include_router(batch_transcription.router, prefix="/api/v1/transcription", tags=["batch-transcription"])
-app.include_router(streaming_transcription.router, prefix="/api/v1/streaming", tags=["streaming-transcription"])
-app.include_router(swarm_api.router, prefix="/api/v2/swarm", tags=["swarm-agents"])
+# Include API routers
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
+app.include_router(patients.router, prefix="/api/v1/patients", tags=["Patients"])
+app.include_router(encounters.router, prefix="/api/v1/encounters", tags=["Encounters"])
+app.include_router(transcription.router, prefix="/api/v1/transcription", tags=["Transcription"])
+app.include_router(streaming.router, prefix="/api/v1/streaming", tags=["Streaming"])
+app.include_router(sse.router, prefix="/api/v1/sse", tags=["Server-Sent Events"])
+app.include_router(ehrbase.router, prefix="/api/v1/ehrbase", tags=["EHRBase Integration"])
 
 
 @app.get("/")
 async def root():
+    """Root endpoint"""
     return {
         "message": "Medical Scribe API",
         "version": settings.APP_VERSION,
-        "status": "running"
+        "features": [
+            "Agent-based transcription processing",
+            "Real-time updates via SSE",
+            "EHRBase integration",
+            "Clinical note generation"
+        ]
     }
 
 
 @app.get("/health")
 async def health_check():
+    """Health check endpoint"""
+    # Check database
+    try:
+        from sqlalchemy import text
+        from app.db.session import SessionLocal
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db.close()
+        db_status = "healthy"
+    except Exception as e:
+        db_status = f"unhealthy: {str(e)}"
+    
+    # Check Redis
+    try:
+        from app.db.session import get_redis
+        redis = get_redis()
+        redis.ping()
+        redis_status = "healthy"
+    except Exception as e:
+        redis_status = f"unhealthy: {str(e)}"
+    
     return {
-        "status": "healthy",
-        "database": "connected",
-        "redis": "connected"
+        "status": "healthy" if db_status == "healthy" and redis_status == "healthy" else "unhealthy",
+        "database": db_status,
+        "redis": redis_status,
+        "agents": "initialized",
+        "version": settings.APP_VERSION
+    }
+
+
+@app.get("/api/test/agents")
+async def test_agents():
+    """Test agent system status"""
+    from app.agents.context_manager import handoff_context
+    from app.agents.medical_scribe_supervisor import medical_scribe_supervisor
+    
+    return {
+        "supervisor_status": "initialized",
+        "active_sessions": len(handoff_context.list_sessions()),
+        "agents": [
+            "TranscriptionAgent",
+            "ClinicalAnalysisAgent",
+            "NoteStructuringAgent",
+            "QualityAssuranceAgent"
+        ],
+        "handoff_enabled": True
     }
 
 
@@ -96,25 +139,34 @@ async def health_check():
 async def test_openai():
     """Test OpenAI API connection"""
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        import openai
+        client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
         
-        # Try a simple completion to test the API key
+        # Test with a simple completion
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Say 'API key is valid'"}],
+            messages=[{"role": "user", "content": "Say 'API Connected'"}],
             max_tokens=10
         )
         
         return {
-            "status": "success",
-            "message": "OpenAI API key is valid",
-            "response": response.choices[0].message.content
+            "status": "connected",
+            "model": "gpt-3.5-turbo",
+            "response": response.choices[0].message.content,
+            "whisper_available": True
         }
     except Exception as e:
-        logger.error(f"OpenAI API test failed: {type(e).__name__}: {str(e)}")
         return {
             "status": "error",
-            "error": str(e),
-            "error_type": type(e).__name__
+            "error": str(e)
         }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.DEBUG
+    )

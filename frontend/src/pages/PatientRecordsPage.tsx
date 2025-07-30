@@ -233,43 +233,8 @@ function PatientRecordsPage() {
         console.log(`Found ${realEncounters.length} encounters from cache`);
       }
       
-      // If no real data available, use enhanced mock data with patient-specific information
-      const mockEncounters: Encounter[] = realEncounters.length > 0 ? realEncounters : [
-        {
-          id: '1',
-          patient_id: patient.ehr_id,
-          encounter_date: '2024-03-15T10:30:00',
-          chief_complaint: 'Chest pain and shortness of breath',
-          provider_name: 'Dr. Smith',
-          encounter_type: 'Emergency',
-          status: 'Completed',
-          vitals: {
-            blood_pressure: '150/95',
-            heart_rate: '95',
-            temperature: '98.6°F',
-            oxygen_saturation: '98%'
-          },
-          diagnosis: ['STEMI', 'Hypertension'],
-          notes: 'Patient presented with acute chest pain. EKG showed ST elevation. Admitted for cardiac catheterization.'
-        },
-        {
-          id: '2',
-          patient_id: patient.ehr_id,
-          encounter_date: '2024-02-20T14:00:00',
-          chief_complaint: 'Follow-up visit',
-          provider_name: 'Dr. Johnson',
-          encounter_type: 'Outpatient',
-          status: 'Completed',
-          vitals: {
-            blood_pressure: '130/80',
-            heart_rate: '72',
-            temperature: '98.4°F'
-          },
-          diagnosis: ['Hypertension - controlled'],
-          notes: 'Blood pressure well controlled on current medications.'
-        }
-      ];
-      setEncounters(mockEncounters);
+      // Use only real encounters from EHRBase
+      setEncounters(realEncounters);
     } catch (error) {
       console.error('Failed to fetch encounters:', error);
     }

@@ -10,6 +10,7 @@ import SignUpPage from './components/Auth/SignUpPage';
 import ProtectedRoute from './components/Auth/ProtectedRoute';
 import AuthenticatedLayout from './components/Layout/AuthenticatedLayout';
 import { PatientProvider } from './contexts/PatientContext';
+import { SSEProvider } from './contexts/SSEContext';
 import theme from './theme/theme';
 
 // Page imports
@@ -100,9 +101,11 @@ function App() {
     <ThemeProvider theme={theme}>
       <QueryClientProvider client={queryClient}>
         <PatientProvider>
-          <Router>
-            <AppContent />
-          </Router>
+          <SSEProvider>
+            <Router>
+              <AppContent />
+            </Router>
+          </SSEProvider>
         </PatientProvider>
       </QueryClientProvider>
     </ThemeProvider>

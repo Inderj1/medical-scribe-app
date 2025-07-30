@@ -1,35 +1,51 @@
-fastapi>=0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
+# Core Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+python-dotenv==1.0.1
+
+# Database
+sqlalchemy==2.0.35
+psycopg2-binary==2.9.10
+alembic==1.13.3
+
+# Authentication
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-sqlalchemy==2.0.23
-alembic==1.12.1
-psycopg2-binary==2.9.9
-redis==5.0.1
-celery==5.3.4
-pydantic>=2.10.0
-pydantic-settings>=2.5.0
-python-dotenv==1.0.0
-httpx==0.25.1
-openai>=1.96.1
+
+# API & Real-time
+httpx==0.27.2
+sse-starlette==2.1.3
+websockets==13.1
+
+# Caching & Background Tasks
+redis==5.2.0
+celery==5.3.6
+flower==2.0.1
+
+# AI Services
+openai>=1.97.1
+openai-agents==0.2.4
 swarm @ git+https://github.com/openai/swarm.git
-anthropic>=0.7.0
-aiohttp==3.9.1
-spacy==3.7.2
-websockets==12.0
-aiofiles==23.2.1
-Pillow==10.1.0
-PyPDF2==3.0.1
-reportlab==4.0.7
-hl7==0.4.5
-fhir.resources==7.1.0
-fhirclient==4.1.0
-cryptography==41.0.7
-pyjwt[crypto]==2.8.0
-pytest==7.4.3
-pytest-asyncio==0.21.1
-black==23.11.0
-flake8==6.1.0
-mypy==1.7.0
-aiortc>=1.6.0
+
+# Audio Processing
+pydub==0.25.1
+ffmpeg-python==0.2.0
+
+# Data Validation
+pydantic==2.10.0
+pydantic-settings==2.7.0
+email-validator==2.2.0
+
+# File Handling
+aiofiles==24.1.0
+
+# Development & Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+black==24.10.0
+flake8==7.1.1
+mypy==1.13.0
+
+# Monitoring
+python-json-logger==2.0.7

@@ -296,11 +296,11 @@ run_migrations() {
     # Run migrations - use Docker database if available
     if docker-compose ps postgres | grep -q "Up"; then
         DATABASE_URL="postgresql://medscribe:medscribe_password@localhost:5432/medical_scribe_db" \
-        python -c "from app.db.session import engine, Base; Base.metadata.create_all(bind=engine)" || {
+        python -c "from app.db.session import engine; from app.db.base_class import Base; Base.metadata.create_all(bind=engine)" || {
             print_warning "Migration failed - database might not be ready yet"
         }
     else
-        python -c "from app.db.session import engine, Base; Base.metadata.create_all(bind=engine)" || {
+        python -c "from app.db.session import engine; from app.db.base_class import Base; Base.metadata.create_all(bind=engine)" || {
             print_warning "Migration failed - database might not be ready yet"
         }
     fi

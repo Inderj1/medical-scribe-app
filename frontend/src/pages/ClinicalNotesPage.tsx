@@ -26,7 +26,9 @@ import PatientHeader from '../components/ClinicalNotes/PatientHeader';
 import ClinicalDocumentationClean from '../components/ClinicalNotes/ClinicalDocumentationClean';
 import RealtimeTranscription from '../components/ClinicalNotes/RealtimeTranscription';
 import ActionBar from '../components/ClinicalNotes/ActionBar';
-import webSocketService from '../services/websocket';
+import { useSSE } from '../contexts/SSEContext';
+import { ehrbaseAPI } from '../services/ehrbase-api';
+import { useWebSpeech } from '../hooks/useWebSpeech';
 import { usePatient } from '../contexts/PatientContext';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import MicIcon from '@mui/icons-material/Mic';
@@ -75,11 +77,86 @@ interface EncounterData {
 
 function ClinicalNotesPage() {
   const navigate = useNavigate();
-  const { selectedPatient, selectedEncounter, recentVitals } = usePatient();
+  const { selectedPatient, selectedEncounter, recentVitals, setSelectedEncounter } = usePatient();
+  const { subscribeToTranscription, unsubscribeFromTranscription, lastEvent, connectionStatus } = useSSE();
+  
+  // State and refs
+  const [currentTranscriptionId, setCurrentTranscriptionId] = useState<string | null>(null);
 
-  // Use patient data from context or fall back to mock data
-  const patient: PatientData = selectedPatient ? {
-    id: selectedPatient.ehr_id || '123',
+  // Define handleEndSession function before useWebSpeech hook
+  const handleEndSession = async () => {
+    if (!currentTranscriptionId) {
+      console.log('No active session to end');
+      return;
+    }
+
+    try {
+      const token = await (window as any).Clerk?.session?.getToken();
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/end`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        console.log('Session ended successfully, agents will now process the transcript');
+      } else {
+        console.error('Failed to end session:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Failed to end streaming session:', error);
+    }
+  };
+  
+  // Web Speech API for real-time transcription
+  const { 
+    isListening, 
+    isSupported, 
+    startListening, 
+    stopListening, 
+    transcript: speechTranscript,
+    interimTranscript 
+  } = useWebSpeech({
+    continuous: true,
+    interimResults: true,
+    language: 'en-US',
+    silenceTimeoutMs: 5000, // 5 seconds of silence ends session
+    onTranscript: async (text, isFinal) => {
+      if (currentTranscriptionId && isFinal) {
+        // Send text chunk to backend
+        try {
+          const token = await (window as any).Clerk?.session?.getToken();
+          await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/text`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              text,
+              is_final: isFinal,
+              timestamp: new Date().toISOString(),
+            }),
+          });
+        } catch (error) {
+          console.error('Failed to send text chunk:', error);
+        }
+      }
+    },
+    onSilenceTimeout: async () => {
+      console.log('Speech ended due to silence, triggering clinical analysis...');
+      await handleEndSession();
+    },
+    onEnd: async () => {
+      console.log('Speech recognition ended, triggering clinical analysis...');
+      await handleEndSession();
+    },
+  });
+
+  // Use patient data from context
+  const patient: PatientData | null = selectedPatient ? {
+    id: selectedPatient.ehr_id || selectedPatient.id || '',
     ehr_id: selectedPatient.ehr_id,
     first_name: selectedPatient.first_name,
     last_name: selectedPatient.last_name,
@@ -94,52 +171,24 @@ function ClinicalNotesPage() {
     recent_diagnosis: selectedPatient.recent_diagnosis,
     recent_chief_complaint: selectedPatient.recent_chief_complaint,
     recent_clinical_notes: selectedPatient.recent_clinical_notes
-  } : {
-    id: '123',
-    first_name: 'John',
-    last_name: 'Doe',
-    mrn: 'MRN001234',
-    date_of_birth: '1978-05-15',
-    gender: 'Male',
-    age: 45,
-    smoking_history: '20+ pack-years',
-    allergies: 'NKDA',
-    ehr_id: '123'
-  };
+  } : null;
 
-  const encounter: EncounterData = selectedEncounter ? {
+  const encounter: EncounterData | null = selectedEncounter ? {
     id: selectedEncounter.id,
     patient_id: selectedEncounter.patient_id,
-    chief_complaint: selectedEncounter.chief_complaint || 'General consultation',
+    chief_complaint: selectedEncounter.chief_complaint || '',
     provider_name: selectedEncounter.provider_name,
     referring_physician: selectedEncounter.provider_name,
     encounter_date: selectedEncounter.encounter_date,
     encounter_type: selectedEncounter.encounter_type,
     status: selectedEncounter.status,
-    risk_factors: patient.smoking_history ? ['smoker'] : [],
+    risk_factors: patient?.smoking_history ? ['smoker'] : [],
     vitals: selectedEncounter.vitals,
     diagnosis: selectedEncounter.diagnosis,
     notes: selectedEncounter.notes
-  } : {
-    id: 'enc-001',
-    patient_id: patient.ehr_id || patient.id || '123',
-    chief_complaint: 'General consultation',
-    provider_name: 'Dr. Smith',
-    referring_physician: 'Dr. Smith',
-    encounter_date: new Date().toISOString(),
-    encounter_type: 'Outpatient',
-    status: 'In Progress',
-    risk_factors: patient.smoking_history ? ['smoker'] : []
-  };
+  } : null;
 
-  const [vitals, setVitals] = useState(recentVitals || {
-    blood_pressure: '120/80',
-    heart_rate: 72,
-    respiratory_rate: 16,
-    temperature: 98.6,
-    oxygen_saturation: 98,
-    pain_level: '0/10'
-  });
+  const [vitals, setVitals] = useState(recentVitals || {});
 
   const [isDraftSaved, setIsDraftSaved] = useState(true);
   const [lastSaveTime, setLastSaveTime] = useState(new Date());
@@ -147,17 +196,16 @@ function ClinicalNotesPage() {
   
   // New state for agent-based system
   const [isLoadingEHR, setIsLoadingEHR] = useState(false);
-  const [clinicalNotesStarted, setClinicalNotesStarted] = useState(false);
   const [activeAgents, setActiveAgents] = useState<any[]>([]);
   const [currentSection, setCurrentSection] = useState<string | null>(null);
   const [sections, setSections] = useState<any>({});
   const [showSummaryReview, setShowSummaryReview] = useState(false);
+  const [transcriptionProgress, setTranscriptionProgress] = useState(0);
 
   // Define this function early so it can be used throughout the component
   const processClinicalNotesPrefill = (data: any) => {
     console.log('Clinical notes prefill received:', data);
     setIsLoadingEHR(false);
-    setClinicalNotesStarted(true);
     
     if (data.data) {
       // Extract sections from the prefill data
@@ -183,6 +231,7 @@ function ClinicalNotesPage() {
       }, {} as Record<string, string>);
       
       setSections(sanitizedSections);
+      console.log('Setting sections state with:', sanitizedSections);
       
       // Handle vitals separately if they exist
       if (prefillSections.vital_signs && typeof prefillSections.vital_signs === 'object') {
@@ -192,85 +241,116 @@ function ClinicalNotesPage() {
       // Store the full prefill data for reference
       console.log('Processed sections:', sanitizedSections);
       console.log('Full prefill data:', data.data);
+      console.log('Sections state will be updated with keys:', Object.keys(sanitizedSections));
     }
   };
 
   useEffect(() => {
-    // Connect WebSocket
-    const connectWebSocket = async () => {
-      const token = await (window as any).Clerk?.session?.getToken();
-      if (token && !webSocketService.isConnected()) {
-        try {
-          await webSocketService.connect(token);
-          console.log('WebSocket connected for clinical notes');
-        } catch (error) {
-          console.error('Failed to connect WebSocket:', error);
-        }
-      }
-    };
-    
-    connectWebSocket();
-
-    // Listen for real-time vital updates
-    const handleVitalUpdate = (data: any) => {
-      if (data.type === 'vitals:update') {
-        setVitals((prevVitals: any) => ({ ...prevVitals, ...data.vitals }));
-      }
-    };
-
-    // Listen for clinical notes prefill
-    const handleClinicalNotesPrefill = processClinicalNotesPrefill;
-
-
-    // Listen for section updates from agents
-    const handleSectionUpdate = (data: any) => {
-      setSections((prev: any) => ({
-        ...prev,
-        [data.section]: data.content
-      }));
+    // Handle SSE events
+    if (lastEvent) {
+      console.log('SSE Event received:', lastEvent);
       
-      // Update active agents
-      setActiveAgents((prev) => {
-        const existing = prev.find(a => a.section === data.section);
-        if (existing) {
-          return prev.map(a => 
-            a.section === data.section 
-              ? { ...a, status: 'completed', confidence: data.confidence }
-              : a
-          );
-        }
-        return [...prev, { 
-          section: data.section, 
-          status: 'completed', 
-          confidence: data.confidence 
-        }];
-      });
-      
-      setCurrentSection(data.section);
-    };
+      switch (lastEvent.type) {
+        case 'processing_started':
+          setIsLoadingEHR(false);
+                break;
+          
+        case 'progress':
+          setTranscriptionProgress(lastEvent.data.progress);
+          if (lastEvent.data.message) {
+            console.log('Progress update:', lastEvent.data.message);
+          }
+          break;
+          
+        case 'transcription_chunk':
+          // Handle real-time transcription chunks
+          console.log('Transcription chunk:', lastEvent.data);
+          break;
+          
+        case 'section_completed':
+          // Handle section completion from agents
+          const { section, content, confidence } = lastEvent.data;
+          setSections((prev: any) => ({
+            ...prev,
+            [section]: content
+          }));
+          
+          setActiveAgents((prev) => {
+            const existing = prev.find(a => a.section === section);
+            if (existing) {
+              return prev.map(a => 
+                a.section === section 
+                  ? { ...a, status: 'completed', confidence }
+                  : a
+              );
+            }
+            return [...prev, { 
+              section, 
+              status: 'completed', 
+              confidence 
+            }];
+          });
+          
+          setCurrentSection(section);
+          break;
+          
+        case 'completed':
+          setIsLoadingEHR(false);
+          setTranscriptionProgress(100);
+          console.log('Transcription completed:', lastEvent.data);
+          break;
+          
+        case 'error':
+          setIsLoadingEHR(false);
+          console.error('Transcription error:', lastEvent.data.error);
+          break;
+      }
+    }
+  }, [lastEvent]);
 
-    webSocketService.on('vitals:update', handleVitalUpdate);
-    webSocketService.on('clinical_notes:prefill', handleClinicalNotesPrefill);
-    webSocketService.on('section:update', handleSectionUpdate);
+  // Load EHR data when patient is selected
+  useEffect(() => {
+    if (patient?.id) {
+      handleStartClinicalNotes();
+    }
+  }, [patient?.id]);
 
+  useEffect(() => {
     // Auto-save draft every 5 minutes
     const autoSaveInterval = setInterval(() => {
       handleSaveDraft();
     }, 300000);
 
     return () => {
-      webSocketService.off('vitals:update', handleVitalUpdate);
-      webSocketService.off('clinical_notes:prefill', handleClinicalNotesPrefill);
-      webSocketService.off('section:update', handleSectionUpdate);
       clearInterval(autoSaveInterval);
       
-      // Disconnect WebSocket when leaving page
-      if (webSocketService.isConnected()) {
-        webSocketService.disconnect();
-        console.log('WebSocket disconnected from clinical notes');
+      // Stop listening if active
+      if (isListening) {
+        stopListening();
+      }
+      
+      // End streaming session if active
+      if (currentTranscriptionId) {
+        // End the streaming session
+        (async () => {
+          try {
+            const token = await (window as any).Clerk?.session?.getToken();
+            await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/end`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+              },
+            });
+          } catch (error) {
+            console.error('Failed to end streaming session:', error);
+          }
+        })();
+        
+        // Unsubscribe from SSE
+        unsubscribeFromTranscription(currentTranscriptionId);
       }
     };
-  }, []);
+  }, [currentTranscriptionId, unsubscribeFromTranscription, isListening, stopListening]);
 
   const handleSaveDraft = async () => {
     // Save draft logic
@@ -297,49 +377,201 @@ function ClinicalNotesPage() {
     
     setIsLoadingEHR(true);
     
-    // If we have comprehensive patient data from context, use it immediately
-    if (selectedPatient && selectedPatient.medical_summary) {
-      const ehrData = {
-        chief_complaint: selectedPatient.recent_chief_complaint || '',
-        history_present_illness: selectedPatient.history_present_illness ? 
-          (selectedPatient.history_present_illness.long_version || selectedPatient.history_present_illness.short_version || '') : '',
-        assessment_and_plan: {
-          diagnoses: selectedPatient.active_problems || [],
-          plan: selectedPatient.active_problems?.map((p: any) => p.plan).join('\n') || ''
-        },
-        medications: selectedPatient.medications?.map((m: any) => 
-          typeof m === 'string' ? m : `${m.name || m} - ${m.dosage || ''}`
-        ).join('\n') || '',
-        allergies: Array.isArray(selectedPatient.allergies) ? 
-          selectedPatient.allergies.map((a: any) => typeof a === 'string' ? a : a.substance).join(', ') : 
-          (selectedPatient.allergies || 'NKDA'),
-        past_medical_history: selectedPatient.past_medical_history?.join(', ') || '',
-        social_history: selectedPatient.social_history || '',
-        family_history: selectedPatient.family_history?.join(', ') || '',
-        vital_signs: selectedPatient.vital_signs || {},
-        physical_exam: selectedPatient.physical_examination || {},
-        lab_results: selectedPatient.lab_results || [],
-        imaging_results: selectedPatient.imaging_results || []
-      };
-      
-      // Simulate the prefill event with real EHR data
-      processClinicalNotesPrefill({
-        type: 'clinical_notes:prefill',
-        data: {
-          sections: ehrData,
-          patient_data: selectedPatient
+    // Initialize ehrData in the function scope
+    let ehrData: Record<string, any> = {};
+    
+    try {
+      // Fetch patient data from EHRBase if available
+      if (patient.ehr_id) {
+        try {
+          // Get patient summary from EHRBase using EHR ID
+          const summary = await ehrbaseAPI.getPatientSummary(patient.ehr_id);
+          console.log('EHRBase patient summary:', summary);
+          console.log('Summary active_problems:', summary?.active_problems);
+          console.log('Summary latest_record:', summary?.latest_record);
+          
+          // Get patient records using EHR ID
+          const records = await ehrbaseAPI.getPatientRecords(patient.ehr_id);
+          console.log('EHRBase patient records:', records);
+          console.log('Records data:', records?.records);
+          
+          // Get recent sections from EHRBase
+          let recentHistory = '';
+          let recentMedications = '';
+          let recentAllergies = patient.allergies || '';
+          
+          if (records?.records && records.records.length > 0) {
+            // Get the most recent record
+            const recentRecord = records.records[0];
+            console.log('Recent record:', recentRecord);
+            
+            // Check if the record has direct content
+            if (recentRecord.content) {
+              recentHistory = recentRecord.content;
+            }
+            
+            // Try to fetch detailed sections if record has an ID
+            if (recentRecord.id || recentRecord.record_id) {
+              const recordId = recentRecord.id || recentRecord.record_id;
+              console.log('Fetching sections for record ID:', recordId);
+              
+              try {
+                // Fetch all sections
+                const [historySection, examinationSection, assessmentSection, planSection] = await Promise.all([
+                  ehrbaseAPI.getRecordSection(recordId, 'history').catch(e => null),
+                  ehrbaseAPI.getRecordSection(recordId, 'examination').catch(e => null),
+                  ehrbaseAPI.getRecordSection(recordId, 'assessment').catch(e => null),
+                  ehrbaseAPI.getRecordSection(recordId, 'plan').catch(e => null)
+                ]);
+                
+                console.log('History section:', historySection);
+                console.log('Examination section:', examinationSection);
+                console.log('Assessment section:', assessmentSection);
+                console.log('Plan section:', planSection);
+                
+                if (historySection) {
+                  recentHistory = historySection.content || historySection.text || historySection.history_present_illness || recentHistory;
+                }
+                
+                if (assessmentSection) {
+                  // Assessment might contain diagnoses
+                  if (assessmentSection.diagnoses) {
+                    summary.active_problems = assessmentSection.diagnoses;
+                  }
+                }
+              } catch (sectionError) {
+                console.warn('Failed to fetch some record sections:', sectionError);
+              }
+            }
+          }
+          
+          // Compile EHR data - check latest_record for actual content
+          const latestRecord = summary?.latest_record;
+          console.log('Active problems from summary:', summary?.active_problems);
+          console.log('Latest record content:', latestRecord);
+          
+          // Check if latest record has the full clinical data
+          let chiefComplaint = 'Patient presents for evaluation';
+          let reviewOfSystems = 'Review of systems negative except as noted in HPI';
+          let physicalExam = 'Physical examination pending';
+          let vitalSigns = {};
+          
+          // Extract from latest record if available
+          if (latestRecord) {
+            if (latestRecord.chief_complaint) chiefComplaint = latestRecord.chief_complaint;
+            if (latestRecord.review_of_systems) reviewOfSystems = latestRecord.review_of_systems;
+            if (latestRecord.physical_examination) physicalExam = latestRecord.physical_examination;
+            if (latestRecord.vital_signs) vitalSigns = latestRecord.vital_signs;
+            
+            // Also check nested structure
+            if (latestRecord.sections) {
+              if (latestRecord.sections.chief_complaint) chiefComplaint = latestRecord.sections.chief_complaint;
+              if (latestRecord.sections.ros) reviewOfSystems = latestRecord.sections.ros;
+              if (latestRecord.sections.physical_exam) physicalExam = latestRecord.sections.physical_exam;
+            }
+          }
+          
+          ehrData = {
+            chief_complaint: selectedEncounter?.chief_complaint || chiefComplaint || summary?.recent_chief_complaint || 'Patient presents for evaluation',
+            history_present_illness: recentHistory || latestRecord?.history_present_illness || summary?.history_present_illness || latestRecord?.content || '',
+            medications: recentMedications || (Array.isArray(summary?.medications) ? summary.medications.join(', ') : summary?.medications) || 'No current medications',
+            allergies: recentAllergies || (Array.isArray(summary?.allergies) ? summary.allergies.join(', ') : summary?.allergies) || 'NKDA',
+            past_medical_history: (Array.isArray(summary?.active_problems) && summary.active_problems.length > 0) 
+              ? summary.active_problems.map((problem: any) => {
+                  if (typeof problem === 'string') return problem;
+                  if (problem.name) return problem.name;
+                  if (problem.description) return problem.description;
+                  if (problem.diagnosis) return problem.diagnosis;
+                  if (problem.condition) return problem.condition;
+                  // Handle structured problem data with ICD code and plan
+                  if (problem.problem && problem.icd_code) {
+                    return `${problem.problem} (ICD-10: ${problem.icd_code})${problem.plan ? `\n   Plan: ${problem.plan}` : ''}`;
+                  }
+                  // Fallback for unstructured data
+                  return JSON.stringify(problem);
+                }).join('\n\n')
+              : (summary?.past_medical_history || patient.recent_diagnosis?.join(', ') || 'No significant past medical history'),
+            social_history: summary?.social_history || patient.smoking_history || 'Not documented',
+            family_history: summary?.family_history || 'Not documented',
+            vital_signs: vitalSigns || latestRecord?.vitals || selectedEncounter?.vitals || recentVitals || summary?.vitals || {},
+            review_of_systems: reviewOfSystems || latestRecord?.review_of_systems || summary?.review_of_systems || 'Review of systems negative except as noted in HPI',
+            physical_examination: physicalExam || latestRecord?.physical_examination || summary?.physical_examination || 'Physical examination pending'
+          };
+          
+          console.log('Compiled EHR data for agents:', ehrData);
+          
+          // Process the prefill data for UI
+          processClinicalNotesPrefill({
+            type: 'clinical_notes:prefill',
+            data: {
+              sections: ehrData,
+              patient_data: patient
+            }
+          });
+          
+          // Update vitals state
+          if (ehrData.vital_signs && Object.keys(ehrData.vital_signs).length > 0) {
+            setVitals(ehrData.vital_signs);
+          }
+        } catch (ehrError) {
+          console.error('Failed to fetch EHRBase data:', ehrError);
+          // Continue without EHR data
         }
+      }
+      
+      // Use existing encounter ID or create a temporary one
+      let encounterId = encounter?.id || `temp-${Date.now()}`;
+      
+      // Start streaming session with agent system
+      const token = await (window as any).Clerk?.session?.getToken();
+      console.log('Starting streaming session with encounter:', encounterId);
+      
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          encounter_id: encounterId,
+          format_preference: 'soap',
+          ehr_sections: ehrData || {}, // Send the actual EHR data that was fetched, not current UI sections
+          // Include patient info for temporary encounters
+          patient_ehr_id: patient.ehr_id,
+          patient_mrn: patient.mrn,
+          patient_first_name: patient.first_name,
+          patient_last_name: patient.last_name,
+          patient_gender: patient.gender,
+          provider_name: encounter?.provider_name || 'Dr. Provider'
+        }),
       });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Streaming session error:', response.status, errorText);
+        throw new Error(`Failed to start streaming session: ${response.status} - ${errorText}`);
+      }
+      
+      const data = await response.json();
+      console.log('Streaming session started:', data);
+      
+      // Subscribe to SSE updates
+      setCurrentTranscriptionId(data.session_id);
+      subscribeToTranscription(data.session_id);
+      
+      // Start speech recognition
+      if (isSupported) {
+        startListening();
+      } else {
+        console.warn('Speech recognition not supported in this browser');
+      }
+      
+      setIsLoadingEHR(false);
+        
+    } catch (error) {
+      console.error('Failed to start clinical notes:', error);
+      setIsLoadingEHR(false);
     }
-    
-    // Call backend to fetch full EHR data for the patient
-    webSocketService.emit('clinical_notes:start', {
-      type: 'clinical_notes:start',
-      patient_id: patient.ehr_id || patient.id,
-      encounter_type: selectedEncounter?.encounter_type || 'routine_visit'
-    });
-    
-    console.log('Requesting clinical notes data from backend for patient:', patient.ehr_id || patient.id);
   };
 
   const handleAddToSection = (section: string, content: string, transcriptionId?: string) => {
@@ -351,12 +583,11 @@ function ClinicalNotesPage() {
       setTranscriptionLinks(prev => new Map(prev).set(`${section}-${Date.now()}`, transcriptionId));
     }
     
-    // Send update via WebSocket
-    webSocketService.emit('notes:update', {
-      type: 'notes:update',
-      section: section,
-      content: { text: content, action: 'append' }
-    });
+    // Update local state
+    setSections((prev: any) => ({
+      ...prev,
+      [section]: prev[section] ? `${prev[section]}\n${content}` : content
+    }));
   };
 
 
@@ -369,15 +600,53 @@ function ClinicalNotesPage() {
       bgcolor: '#f8f9fa',
       overflow: 'hidden'
     }}>
-      {/* Patient Header - Full Width */}
-      <Box sx={{ px: 2, py: 1, bgcolor: '#ffffff', borderBottom: '1px solid #e0e0e0' }}>
-        <PatientHeader 
-          patient={patient} 
-          encounter={encounter}
-          vitals={vitals}
-          onBack={() => navigate('/patient-records')}
-        />
-      </Box>
+      {/* Check if patient is selected */}
+      {!patient ? (
+        <Box sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100%',
+          gap: 2
+        }}>
+          <Typography variant="h6" color="text.secondary">
+            No patient selected
+          </Typography>
+          <Button
+            variant="contained"
+            startIcon={<ArrowBackIcon />}
+            onClick={() => navigate('/patients')}
+          >
+            Select a Patient
+          </Button>
+        </Box>
+      ) : (
+        <>
+          {/* Patient Header - Full Width */}
+          <Box sx={{ px: 2, py: 1, bgcolor: '#ffffff', borderBottom: '1px solid #e0e0e0' }}>
+            <PatientHeader 
+              patient={{
+                ...patient,
+                allergies: Array.isArray(patient.allergies) 
+                  ? patient.allergies.join(', ')
+                  : patient.allergies
+              }} 
+              encounter={encounter || {
+                id: '',
+                patient_id: patient.id,
+                chief_complaint: '',
+                provider_name: '',
+                referring_physician: '',
+                encounter_date: new Date().toISOString(),
+                encounter_type: 'Unknown',
+                status: 'Active',
+                risk_factors: []
+              }}
+              vitals={vitals}
+              onBack={() => navigate('/patient-records')}
+            />
+          </Box>
       
       {/* Main Content Grid - Three Column Layout */}
       <Box sx={{ 
@@ -387,41 +656,6 @@ function ClinicalNotesPage() {
         bgcolor: '#f8f9fa',
         minHeight: 0  // Important for flex child to shrink
       }}>
-        {!clinicalNotesStarted ? (
-          /* Start Clinical Notes Screen */
-          <Box sx={{
-            width: '100%',
-            height: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}>
-            <Box sx={{
-              textAlign: 'center',
-              maxWidth: 600
-            }}>
-              <Button
-                variant="contained"
-                size="large"
-                startIcon={<PlayArrowIcon />}
-                onClick={handleStartClinicalNotes}
-                disabled={isLoadingEHR}
-                sx={{
-                  py: 2,
-                  px: 4,
-                  fontSize: '1.2rem',
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  '&:hover': {
-                    background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)'
-                  }
-                }}
-              >
-                Start Clinical Notes
-              </Button>
-            </Box>
-          </Box>
-        ) : (
-          <>
             {/* Left Panel: Live Transcription */}
             <Box sx={{ 
               width: 320,
@@ -450,30 +684,86 @@ function ClinicalNotesPage() {
                 flex: 1,
                 display: 'flex',
                 flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textAlign: 'center',
-                gap: 2
+                gap: 2,
+                overflowY: 'auto'
               }}>
-                <Box sx={{
-                  width: 80,
-                  height: 80,
-                  borderRadius: '50%',
-                  border: '3px solid rgba(255,255,255,0.3)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <MicIcon sx={{ fontSize: 40, opacity: 0.7 }} />
+                {/* Transcription controls */}
+                <Box sx={{ textAlign: 'center' }}>
+                  <Box sx={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: '50%',
+                    border: '3px solid rgba(255,255,255,0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    margin: '0 auto',
+                    mb: 2,
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease',
+                    bgcolor: isListening ? 'rgba(255,255,255,0.2)' : 'transparent',
+                    '&:hover': {
+                      bgcolor: 'rgba(255,255,255,0.1)',
+                      transform: 'scale(1.05)'
+                    }
+                  }}
+                  onClick={() => isListening ? stopListening() : startListening()}
+                  >
+                    <MicIcon sx={{ 
+                      fontSize: 40, 
+                      opacity: isListening ? 1 : 0.7,
+                      animation: isListening ? 'pulse 2s infinite' : 'none'
+                    }} />
+                  </Box>
+                  
+                  <Typography variant="h6" sx={{ opacity: 0.9, mb: 1 }}>
+                    {isListening ? 'Listening...' : 'Ready to Transcribe'}
+                  </Typography>
+                  
+                  {!isSupported && (
+                    <Alert severity="warning" sx={{ mx: 2 }}>
+                      Speech recognition not supported. Please use Chrome or Edge.
+                    </Alert>
+                  )}
                 </Box>
                 
-                <Typography variant="h6" sx={{ opacity: 0.9 }}>
-                  Ready to Transcribe
-                </Typography>
+                {/* Live transcript display */}
+                {(speechTranscript || interimTranscript) && (
+                  <Box sx={{ 
+                    px: 2,
+                    flex: 1,
+                    overflowY: 'auto'
+                  }}>
+                    <Typography variant="body2" sx={{ 
+                      color: 'rgba(255,255,255,0.9)',
+                      lineHeight: 1.6
+                    }}>
+                      {speechTranscript}
+                    </Typography>
+                    {interimTranscript && (
+                      <Typography variant="body2" sx={{ 
+                        color: 'rgba(255,255,255,0.6)',
+                        fontStyle: 'italic',
+                        display: 'inline'
+                      }}>
+                        {' ' + interimTranscript}
+                      </Typography>
+                    )}
+                  </Box>
+                )}
                 
-                <Typography variant="body2" sx={{ opacity: 0.7, maxWidth: 200 }}>
-                  Click the microphone to begin recording your conversation
-                </Typography>
+                {/* Word count */}
+                {speechTranscript && (
+                  <Box sx={{ 
+                    px: 2, 
+                    py: 1, 
+                    borderTop: '1px solid rgba(255,255,255,0.2)' 
+                  }}>
+                    <Typography variant="caption" sx={{ opacity: 0.7 }}>
+                      {speechTranscript.split(' ').filter(w => w.length > 0).length} words
+                    </Typography>
+                  </Box>
+                )}
               </Box>
             </Box>
 
@@ -506,58 +796,146 @@ function ClinicalNotesPage() {
               </Box>
 
               <Box sx={{ p: 2, flex: 1, overflow: 'auto' }}>
-                <Accordion expanded defaultExpanded>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {/* Chief Complaint */}
+                {(sections.chief_complaint || encounter?.chief_complaint) && (
+                  <Accordion expanded defaultExpanded>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                       <Typography variant="subtitle1" fontWeight={600}>
-                        PRESENT ILLNESS
+                        CHIEF COMPLAINT
                       </Typography>
-                      <Chip label="Duration: >1 month" size="small" color="warning" />
-                    </Box>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Box sx={{ borderLeft: '3px solid #f44336', pl: 2 }}>
-                      <Typography variant="body2" paragraph>
-                        Patient presents with progressive exertional dyspnea over the past 3 
-                        months, initially occurring with moderate activity but now exacerbated by 
-                        minimal exertion. Symptoms demonstrate marked improvement following 
-                        recent thoracentesis, suggesting significant pleural component 
-                        to respiratory compromise.
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2">
+                        {sections.chief_complaint || encounter?.chief_complaint}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        Progressive over 3 months
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* History of Present Illness */}
+                {sections.history_present_illness && (
+                  <Accordion expanded defaultExpanded sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        HISTORY OF PRESENT ILLNESS
                       </Typography>
-                    </Box>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.history_present_illness}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
 
-                    <Divider sx={{ my: 2 }} />
+                {/* Past Medical History */}
+                {sections.past_medical_history && (
+                  <Accordion defaultExpanded sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        PAST MEDICAL HISTORY
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {sections.past_medical_history.split('\n\n').map((problem: string, index: number) => (
+                          <Box key={index} sx={{ 
+                            p: 1.5, 
+                            bgcolor: 'grey.50', 
+                            borderRadius: 1,
+                            borderLeft: '3px solid',
+                            borderLeftColor: 'primary.main'
+                          }}>
+                            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                              {problem}
+                            </Typography>
+                          </Box>
+                        ))}
+                      </Box>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
 
-                    <Typography variant="body2" paragraph>
-                      Productive cough with yellowish-green mucopurulent sputum, 
-                      accompanied by intermittent hemoptysis (approximately 5-10ml of bright 
-                      red blood per episode). The presence of blood-tinged sputum raises 
-                      concern for underlying malignancy or significant bronchial irritation.
+                {/* Medications */}
+                {sections.medications && (
+                  <Accordion defaultExpanded sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        MEDICATIONS
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.medications}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Allergies */}
+                {sections.allergies && (
+                  <Accordion defaultExpanded sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        ALLERGIES
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.allergies}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Review of Systems */}
+                {sections.review_of_systems && (
+                  <Accordion sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        REVIEW OF SYSTEMS
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.review_of_systems}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Physical Examination */}
+                {sections.physical_examination && (
+                  <Accordion sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        PHYSICAL EXAMINATION
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.physical_examination}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Show placeholder if no sections have data yet */}
+                {!Object.values(sections).some(v => v) && !encounter?.chief_complaint && (
+                  <Box sx={{ 
+                    textAlign: 'center', 
+                    py: 4, 
+                    px: 2,
+                    color: 'text.secondary' 
+                  }}>
+                    <Typography variant="body1" gutterBottom>
+                      Clinical notes will appear here as you speak
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Hemoptysis × 2 weeks
-                    </Typography>
-
-                    <Divider sx={{ my: 2 }} />
-
-                    <Typography variant="body2" paragraph>
-                      Patient reports pleuritic chest pain localized to the right hemithorax, 
-                      characterized as sharp and exacerbated by deep inspiration. Pain does not 
-                      radiate to other regions and is not associated with diaphoresis or nausea.
-                    </Typography>
-
-                    <Divider sx={{ my: 2 }} />
-
                     <Typography variant="body2">
-                      Denies constitutional symptoms including fever, chills, or night sweats. No 
-                      significant unintentional weight loss reported, though appetite has been 
-                      diminished secondary to dyspnea.
+                      Start speaking to begin documentation
                     </Typography>
-                  </AccordionDetails>
-                </Accordion>
+                  </Box>
+                )}
               </Box>
             </Box>
 
@@ -584,81 +962,84 @@ function ClinicalNotesPage() {
               </Box>
 
               <Box sx={{ p: 2, flex: 1, overflow: 'auto' }}>
-                <Accordion expanded defaultExpanded>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography variant="subtitle1" fontWeight={600}>
-                      WORKING DIAGNOSIS
+                {/* Assessment */}
+                {sections.assessment && (
+                  <Accordion expanded defaultExpanded>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        ASSESSMENT
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.assessment}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Plan */}
+                {sections.plan && (
+                  <Accordion expanded defaultExpanded sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        PLAN
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.plan}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Diagnostic Results */}
+                {sections.diagnostic_results && (
+                  <Accordion sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        DIAGNOSTIC RESULTS
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.diagnostic_results}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Show placeholder if no assessment/plan yet */}
+                {!sections.assessment && !sections.plan && (
+                  <Box sx={{ 
+                    textAlign: 'center', 
+                    py: 4, 
+                    px: 2,
+                    color: 'text.secondary' 
+                  }}>
+                    <Typography variant="body1" gutterBottom>
+                      Assessment and plan will be generated
                     </Typography>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Box sx={{ bgcolor: '#fff3cd', p: 2, borderRadius: 1, mb: 2 }}>
-                      <Typography variant="body2" fontWeight={600} gutterBottom>
-                        1. Suspected primary bronchogenic carcinoma with secondary 
-                        malignant pleural effusion, pending histopathological confirmation
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        ICD-10: C78.00
-                      </Typography>
-                    </Box>
-
-                    <Box sx={{ bgcolor: '#f8f9fa', p: 2, borderRadius: 1 }}>
-                      <Typography variant="body2" fontWeight={600} gutterBottom>
-                        2. Large right-sided pleural effusion, likely malignant etiology given 
-                        serosanguineous nature and exudative characteristics
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        ICD-10: J94.8
-                      </Typography>
-                    </Box>
-                  </AccordionDetails>
-                </Accordion>
-
-                <Accordion expanded defaultExpanded sx={{ mt: 2 }}>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography variant="subtitle1" fontWeight={600}>
-                      TREATMENT PLAN
+                    <Typography variant="body2">
+                      Based on the clinical information provided
                     </Typography>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                      IMMEDIATE ACTIONS
-                    </Typography>
+                  </Box>
+                )}
 
-                    <FormControlLabel
-                      control={<Checkbox defaultChecked />}
-                      label={
-                        <Typography variant="body2">
-                          High-resolution computed tomography of chest with IV contrast to 
-                          evaluate extent of pulmonary parenchymal involvement, mediastinal 
-                          lymphadenopathy, and exclude pulmonary embolism
-                        </Typography>
-                      }
-                    />
-
-                    <FormControlLabel
-                      control={<Checkbox defaultChecked />}
-                      label={
-                        <Typography variant="body2">
-                          Positron emission tomography with CT correlation for comprehensive 
-                          staging
-                        </Typography>
-                      }
-                    />
-
-                    <Box sx={{ mt: 2, p: 2, bgcolor: '#f0f8ff', borderRadius: 1 }}>
-                      <Typography variant="caption" fontWeight={600}>
-                        Stop recording
-                      </Typography>
+                {/* Progress indicator */}
+                {transcriptionProgress > 0 && transcriptionProgress < 100 && (
+                  <Box sx={{ mt: 2, p: 2, bgcolor: '#f0f8ff', borderRadius: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <CircularProgress size={20} />
                       <Typography variant="body2">
-                        malignancy confirmed on tissue diagnosis
+                        Processing clinical notes... {transcriptionProgress}%
                       </Typography>
                     </Box>
-                  </AccordionDetails>
-                </Accordion>
+                  </Box>
+                )}
               </Box>
             </Box>
-          </>
-        )}
       </Box>
       
       {/* Bottom Action Bar */}
@@ -702,17 +1083,18 @@ function ClinicalNotesPage() {
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
           <Typography variant="body2" color="text.secondary">
-            Last saved: 2 minutes ago
+            {isDraftSaved ? `Last saved: ${new Date(lastSaveTime).toLocaleTimeString()}` : 'Unsaved changes'}
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Box sx={{
               width: 8,
               height: 8,
               borderRadius: '50%',
-              bgcolor: '#4caf50'
+              bgcolor: isListening ? '#f44336' : '#4caf50',
+              animation: isListening ? 'pulse 1.5s infinite' : 'none'
             }} />
             <Typography variant="body2">
-              Voice recording: Recording
+              Voice recording: {isListening ? 'Recording' : 'Ready'}
             </Typography>
           </Box>
         </Box>
@@ -733,6 +1115,8 @@ function ClinicalNotesPage() {
           Loading patient data from EHR...
         </Typography>
       </Backdrop>
+        </>
+      )}
     </Box>
   );
 }

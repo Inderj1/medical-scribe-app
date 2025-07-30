@@ -1,36 +1,47 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Float
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import uuid
-import enum
+from datetime import datetime
 
-from app.db.session import Base
-
-
-class NoteSection(str, enum.Enum):
-    HISTORY = "history"
-    REVIEW_OF_SYSTEMS = "review_of_systems"
-    PHYSICAL_EXAM = "physical_exam"
-    ASSESSMENT = "assessment"
-    PLAN = "plan"
-    MEDICATIONS = "medications"
-    ALLERGIES = "allergies"
-    SOCIAL_HISTORY = "social_history"
-    FAMILY_HISTORY = "family_history"
+from app.db.base import Base
 
 
 class ClinicalNote(Base):
     __tablename__ = "clinical_notes"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    encounter_id = Column(UUID(as_uuid=True), ForeignKey("encounters.id"), nullable=False)
-    section_type = Column(Enum(NoteSection), nullable=False)
-    content = Column(JSONB)  # Structured content for the section
-    version = Column(String(10), default="1.0")  # For tracking schema versions
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    transcription_id = Column(UUID(as_uuid=True), ForeignKey("transcriptions.id", ondelete="CASCADE"))
+    encounter_id = Column(UUID(as_uuid=True), ForeignKey("encounters.id", ondelete="CASCADE"))
+    
+    # SOAP Format
+    subjective = Column(Text)
+    objective = Column(Text)
+    assessment = Column(Text)
+    plan = Column(Text)
+    
+    # Detailed Sections
+    chief_complaint = Column(Text)
+    history_present_illness = Column(Text)
+    review_of_systems = Column(Text)
+    past_medical_history = Column(Text)
+    past_surgical_history = Column(Text)
+    medications = Column(Text)
+    allergies = Column(Text)
+    social_history = Column(Text)
+    family_history = Column(Text)
+    physical_exam = Column(Text)
+    diagnostic_results = Column(Text)
+    
+    # Metadata
+    format_type = Column(String, default="soap")  # soap, bullet, narrative
+    quality_score = Column(Float)
+    ehr_composition_id = Column(String)
+    ai_confidence_scores = Column(JSONB)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    encounter = relationship("Encounter", back_populates="clinical_notes")
-    created_by_user = relationship("User")
+    transcription = relationship("Transcription", backref="clinical_notes")
+    encounter = relationship("Encounter", backref="clinical_notes")

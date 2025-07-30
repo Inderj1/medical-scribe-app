@@ -1,33 +1,33 @@
-from sqlalchemy import Column, String, Date, DateTime, Enum
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.sql import func
+from sqlalchemy import Column, String, Date, DateTime, Text
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
-import enum
+from datetime import datetime, date
 
-from app.db.session import Base
-
-
-class Gender(str, enum.Enum):
-    MALE = "male"
-    FEMALE = "female"
-    OTHER = "other"
-    UNKNOWN = "unknown"
+from app.db.base import Base
 
 
 class Patient(Base):
     __tablename__ = "patients"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    mrn = Column(String(50), unique=True, nullable=False, index=True)
-    first_name = Column(String(100))
-    last_name = Column(String(100))
+    ehr_id = Column(String, unique=True, index=True)
+    mrn = Column(String, unique=True, nullable=False, index=True)
+    first_name = Column(String, nullable=False)
+    last_name = Column(String, nullable=False)
     date_of_birth = Column(Date)
-    gender = Column(Enum(Gender), default=Gender.UNKNOWN)
-    phone = Column(String(20))
-    email = Column(String(100))
-    address = Column(String(255))
-    emergency_contact = Column(String(100))
-    emergency_phone = Column(String(20))
-    ehr_id = Column(String(100), index=True)  # External EHR patient ID
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    gender = Column(String)
+    phone = Column(String)
+    email = Column(String)
+    address = Column(Text)
+    insurance_info = Column(JSONB)
+    emergency_contact = Column(JSONB)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    @property
+    def age(self):
+        """Calculate age from date of birth"""
+        if not self.date_of_birth:
+            return None
+        today = date.today()
+        return today.year - self.date_of_birth.year - ((today.month, today.day) < (self.date_of_birth.month, self.date_of_birth.day))
