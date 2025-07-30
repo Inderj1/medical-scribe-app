@@ -5,7 +5,6 @@ from datetime import datetime
 from swarm import Agent
 
 from app.core.config import settings
-from app.core.sse_manager import sse_manager
 from app.agents.context_manager import handoff_context
 
 logger = logging.getLogger(__name__)
@@ -163,19 +162,24 @@ def structure_clinical_note(session_id: str) -> Agent:
             "structuring_status": "completed"
         })
         
-        # Send SSE update
+        # Prepare sections for SSE publishing
         transcription_id = handoff_context.get_from_context(session_id, "transcription_id")
-        if transcription_id:
-            asyncio.create_task(
-                sse_manager.publish(
-                    f"transcription:{transcription_id}",
-                    "note_structured",
-                    {
-                        "format": format_preference,
-                        "note": formatted_note
-                    }
-                )
-            )
+        if transcription_id and formatted_note:
+            # Add formatted note sections to SSE queue
+            existing_sections = handoff_context.get_from_context(session_id, "sections_for_sse", {})
+            
+            if format_preference == "soap" and isinstance(formatted_note, dict):
+                # Add SOAP sections
+                for key in ["subjective", "objective", "assessment", "plan"]:
+                    if key in formatted_note and formatted_note[key]:
+                        existing_sections[f"soap_{key}"] = {
+                            "content": formatted_note[key],
+                            "confidence": 0.9
+                        }
+            
+            handoff_context.update_context(session_id, {
+                "sections_for_sse": existing_sections
+            })
         
         logger.info(f"Completed note structuring for session {session_id}")
         
@@ -247,5 +251,4 @@ Ensure professional medical documentation standards.
 
 
 # Import at the bottom to avoid circular import
-import asyncio
 from app.agents.quality_assurance_agent import quality_assurance_agent

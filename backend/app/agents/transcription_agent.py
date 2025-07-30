@@ -3,10 +3,8 @@ import os
 import logging
 from typing import Dict, Any, Optional
 from swarm import Agent
-import asyncio
 
 from app.core.config import settings
-from app.core.sse_manager import sse_manager
 from app.agents.context_manager import handoff_context
 
 logger = logging.getLogger(__name__)
@@ -50,23 +48,21 @@ def process_text_chunk(session_id: str, text_chunk: str, is_final: bool = False)
             "is_final_chunk": is_final
         })
         
-        # Send SSE update
+        # Store SSE update in context for later publishing
         transcription_id = handoff_context.get_from_context(session_id, "transcription_id")
         if transcription_id:
-            asyncio.create_task(
-                sse_manager.publish(
-                    f"transcription:{transcription_id}",
-                    {
-                        "type": "transcription_update",
-                        "data": {
-                            "chunk": text_chunk,
-                            "total_transcript": full_transcript,
-                            "word_count": word_count,
-                            "is_final": is_final
-                        }
+            # Mark for SSE publishing by the async handler
+            handoff_context.update_context(session_id, {
+                "pending_sse_event": {
+                    "type": "transcription_update",
+                    "data": {
+                        "chunk": text_chunk,
+                        "total_transcript": full_transcript,
+                        "word_count": word_count,
+                        "is_final": is_final
                     }
-                )
-            )
+                }
+            })
         
         return f"Processed text chunk: {len(text_chunk)} characters, total: {word_count} words"
         
@@ -118,8 +114,14 @@ def complete_transcription(session_id: str) -> Agent:
         transcript = handoff_context.get_from_context(session_id, "transcript", "")
         word_count = handoff_context.get_from_context(session_id, "word_count", 0)
         
-        if not transcript:
-            raise ValueError("No transcript found in context")
+        if not transcript or not transcript.strip():
+            logger.warning(f"Empty transcript for session {session_id}")
+            handoff_context.update_context(session_id, {
+                "transcription_status": "empty",
+                "error": "No speech input was recorded"  
+            })
+            # Still complete the transcription with empty content
+            return clinical_analysis_agent
         
         # Update final status
         handoff_context.update_context(session_id, {
@@ -130,21 +132,11 @@ def complete_transcription(session_id: str) -> Agent:
         
         logger.info(f"Completed transcription for session {session_id}: {word_count} words")
         
-        # Send completion event
-        transcription_id = handoff_context.get_from_context(session_id, "transcription_id")
-        if transcription_id:
-            asyncio.create_task(
-                sse_manager.publish(
-                    f"transcription:{transcription_id}",
-                    {
-                        "type": "transcription_complete", 
-                        "data": {
-                            "transcript": transcript,
-                            "word_count": word_count
-                        }
-                    }
-                )
-            )
+        # Mark transcript as ready for SSE publishing
+        # The agent_runner's monitoring task will pick this up
+        handoff_context.update_context(session_id, {
+            "transcript_ready_for_sse": True
+        })
         
         # Hand off to clinical analysis
         return clinical_analysis_agent

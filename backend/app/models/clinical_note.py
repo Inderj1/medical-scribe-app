@@ -32,6 +32,8 @@ class ClinicalNote(Base):
     family_history = Column(Text)
     physical_exam = Column(Text)
     diagnostic_results = Column(Text)
+    additional_notes = Column(Text)
+    care_coordination = Column(Text)
     
     # Metadata
     format_type = Column(String, default="soap")  # soap, bullet, narrative

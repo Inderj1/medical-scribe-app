@@ -21,6 +21,73 @@ from app.db.session import SessionLocal, get_redis
 logger = logging.getLogger(__name__)
 
 
+async def _monitor_sections_continuously(transcription_id: str, channel: str) -> None:
+    """Continuously monitor context for section updates and publish SSE events"""
+    published_sections = set()
+    
+    try:
+        while True:
+            context = handoff_context.get_context(transcription_id)
+            
+            # Check for transcript updates
+            transcript = context.get("transcript")
+            if transcript and "transcript" not in published_sections:
+                await sse_manager.publish(channel, {
+                    "type": "transcription_chunk",
+                    "data": {
+                        "transcription_id": transcription_id,
+                        "transcript": transcript[:500],  # Send preview
+                        "complete": True
+                    }
+                })
+                published_sections.add("transcript")
+                await update_progress(transcription_id, 25, "Transcription completed")
+            
+            # Check for clinical sections
+            sections_for_sse = context.get("sections_for_sse", {})
+            for section, data in sections_for_sse.items():
+                if section not in published_sections:
+                    await sse_manager.publish(channel, {
+                        "type": "section_completed",
+                        "data": {
+                            "transcription_id": transcription_id,
+                            "section": section,
+                            "content": data.get("content", ""),
+                            "confidence": data.get("confidence", 0.8)
+                        }
+                    })
+                    logger.info(f"Published section_completed event for {section}")
+                    published_sections.add(section)
+                    
+                    # Update progress based on sections completed
+                    progress = min(25 + (len(published_sections) * 5), 90)
+                    await update_progress(transcription_id, progress, f"Completed {section}")
+            
+            # Check for final note
+            final_note = context.get("final_note")
+            if final_note and "final_note" not in published_sections:
+                await sse_manager.publish(channel, {
+                    "type": "section_completed",
+                    "data": {
+                        "transcription_id": transcription_id,
+                        "section": "final_note",
+                        "content": final_note.get("subjective", "")[:500] if isinstance(final_note, dict) else str(final_note)[:500],
+                        "confidence": 0.95
+                    }
+                })
+                published_sections.add("final_note")
+                await update_progress(transcription_id, 95, "Note structuring completed")
+            
+            # Small delay to avoid excessive polling
+            await asyncio.sleep(0.5)
+            
+    except asyncio.CancelledError:
+        logger.info(f"Section monitoring cancelled for {transcription_id}")
+        raise
+    except Exception as e:
+        logger.error(f"Error in continuous section monitoring: {e}")
+
+
 async def run_agent_processing(
     transcription_id: str,
     audio_file_path: str,
@@ -96,11 +163,28 @@ async def run_agent_processing(
         # Run agent pipeline
         logger.info(f"Starting agent pipeline for transcription {transcription_id}")
         
-        # Execute supervisor agent (runs in sync thread due to Swarm)
-        result = await asyncio.to_thread(
-            medical_scribe_supervisor.process_audio,
-            transcription_id
+        # Create tasks for concurrent execution
+        processing_task = asyncio.create_task(
+            asyncio.to_thread(
+                medical_scribe_supervisor.process_audio,
+                transcription_id
+            )
         )
+        
+        # Monitor for section updates while processing
+        monitoring_task = asyncio.create_task(
+            _monitor_sections_continuously(transcription_id, channel)
+        )
+        
+        # Wait for processing to complete
+        result = await processing_task
+        
+        # Cancel monitoring task
+        monitoring_task.cancel()
+        try:
+            await monitoring_task
+        except asyncio.CancelledError:
+            pass
         
         # Get final context
         final_context = handoff_context.get_context(transcription_id)
@@ -128,16 +212,16 @@ async def run_agent_processing(
             transcription.completed_at = datetime.utcnow()
             
             # Create clinical note
-            clinical_sections = final_context.get("clinical_sections", {})
-            structured_note = final_context.get("structured_note", {})
-            quality_results = final_context.get("quality_assessment", {})
+            clinical_sections = final_context.get("clinical_data", {})
+            structured_note = final_context.get("final_note", {})
+            quality_results = final_context.get("qa_report", {})
             
             clinical_note = ClinicalNote(
                 transcription_id=transcription.id,
                 encounter_id=transcription.encounter_id,
                 format_type=format_preference,
                 chief_complaint=clinical_sections.get("chief_complaint"),
-                history_present_illness=clinical_sections.get("history_of_present_illness"),
+                history_present_illness=clinical_sections.get("history_present_illness"),
                 review_of_systems=clinical_sections.get("review_of_systems"),
                 past_medical_history=clinical_sections.get("past_medical_history"),
                 past_surgical_history=clinical_sections.get("past_surgical_history"),
@@ -147,6 +231,8 @@ async def run_agent_processing(
                 family_history=clinical_sections.get("family_history"),
                 physical_exam=clinical_sections.get("physical_examination"),
                 diagnostic_results=clinical_sections.get("diagnostic_results"),
+                additional_notes=clinical_sections.get("additional_notes"),
+                care_coordination=clinical_sections.get("care_coordination"),
                 subjective=structured_note.get("subjective"),
                 objective=structured_note.get("objective"),
                 assessment=structured_note.get("assessment"),

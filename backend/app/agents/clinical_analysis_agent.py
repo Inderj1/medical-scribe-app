@@ -1,13 +1,11 @@
 """Clinical Analysis Agent using GPT-4"""
 import json
 import logging
-import asyncio
 from typing import Dict, Any
 from swarm import Agent
 import openai
 
 from app.core.config import settings
-from app.core.sse_manager import sse_manager
 from app.agents.context_manager import handoff_context
 
 logger = logging.getLogger(__name__)
@@ -18,9 +16,14 @@ client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
 
 def analyze_transcript(session_id: str) -> str:
     """Start analysis of the transcript"""
-    transcript = handoff_context.get_from_context(session_id, "transcript")
-    if not transcript:
-        return "Error: No transcript found in context"
+    transcript = handoff_context.get_from_context(session_id, "transcript", "")
+    if not transcript or not transcript.strip():
+        logger.warning(f"Empty transcript for clinical analysis in session {session_id}")
+        handoff_context.update_context(session_id, {
+            "analysis_status": "skipped_empty",
+            "clinical_data": {"note": "No speech input was recorded"}
+        })
+        return "Skipped analysis: No transcript content available"
     
     logger.info(f"Starting clinical analysis for session {session_id}")
     
@@ -29,16 +32,15 @@ def analyze_transcript(session_id: str) -> str:
         "analysis_status": "started"
     })
     
-    # Send SSE update
+    # Store SSE update in context for later publishing
     transcription_id = handoff_context.get_from_context(session_id, "transcription_id")
     if transcription_id:
-        asyncio.create_task(
-            sse_manager.publish(
-                f"transcription:{transcription_id}",
-                "analyzing",
-                {"message": "Starting clinical analysis..."}
-            )
-        )
+        handoff_context.update_context(session_id, {
+            "pending_sse_event": {
+                "type": "analyzing",
+                "data": {"message": "Starting clinical analysis..."}
+            }
+        })
     
     return f"Starting analysis of transcript ({len(transcript)} characters)"
 
@@ -46,8 +48,18 @@ def analyze_transcript(session_id: str) -> str:
 def extract_clinical_sections(session_id: str) -> Agent:
     """Extract clinical information from transcript and hand off to structuring"""
     try:
-        transcript = handoff_context.get_from_context(session_id, "transcript")
+        transcript = handoff_context.get_from_context(session_id, "transcript", "")
         patient_context = handoff_context.get_from_context(session_id, "patient_context", {})
+        
+        # Handle empty transcript
+        if not transcript or not transcript.strip():
+            logger.warning(f"Empty transcript in extract_clinical_sections for session {session_id}")
+            handoff_context.update_context(session_id, {
+                "analysis_status": "completed_empty",
+                "clinical_data": {"note": "No speech input was recorded"}
+            })
+            # Still hand off to next agent
+            return note_structuring_agent
         ehr_sections = handoff_context.get_from_context(session_id, "ehr_sections", {})
         
         system_prompt = """You are a medical scribe AI assistant. Extract and structure clinical information from the transcript into these exact JSON keys:
@@ -65,7 +77,9 @@ def extract_clinical_sections(session_id: str) -> Agent:
   "vital_signs": "Vital signs if mentioned (BP, HR, temp, etc.)",
   "diagnostic_results": "Lab results, imaging, test results",
   "assessment": "Clinical assessment and differential diagnosis",
-  "plan": "Treatment plan and follow-up recommendations"
+  "plan": "Treatment plan and follow-up recommendations",
+  "additional_notes": "Other relevant information that doesn't fit in standard sections",
+  "care_coordination": "Communication with other providers, referrals, care team notes"
 }
 
 For each section:
@@ -73,8 +87,14 @@ For each section:
 - If a section is not mentioned, set value to null
 - For complex sections like review_of_systems or physical_examination, you may use nested objects
 - Include confidence scores where appropriate
+- Use "additional_notes" for any important information that doesn't clearly fit into other sections
+- Use "care_coordination" for discussions about referrals, communication with other providers, or care team notes
 
-IMPORTANT: Use these exact JSON keys. Build upon and enhance any existing EHR data provided, don't replace it unless the transcript contains updated information."""
+IMPORTANT: 
+- Use these exact JSON keys
+- Build upon and enhance any existing EHR data provided, don't replace it unless the transcript contains updated information
+- Don't force content into inappropriate sections - use additional_notes when uncertain
+- Preserve ALL clinically relevant information from the transcript"""
 
         # Build context with EHR data
         existing_data_text = ""
@@ -139,7 +159,9 @@ Extract and enhance clinical information according to the sections provided. Inc
             "physical_examination",
             "assessment", 
             "plan",
-            "diagnostic_results"
+            "diagnostic_results",
+            "additional_notes",
+            "care_coordination"
         ]
         transcription_id = handoff_context.get_from_context(session_id, "transcription_id")
         

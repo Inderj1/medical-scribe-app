@@ -17,7 +17,7 @@ class Encounter(Base):
     chief_complaint = Column(Text)
     encounter_date = Column(DateTime, default=datetime.utcnow)
     encounter_type = Column(String)  # office_visit, emergency, telehealth
-    status = Column(String, default="active")  # active, completed, cancelled
+    status = Column(String, default="ACTIVE")  # ACTIVE, PAUSED, COMPLETED, SIGNED, CANCELLED
     provider_name = Column(String)
     location = Column(String)
     extra_metadata = Column(JSONB)

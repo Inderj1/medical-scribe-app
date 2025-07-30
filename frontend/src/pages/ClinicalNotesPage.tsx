@@ -109,6 +109,25 @@ function ClinicalNotesPage() {
     }
   };
   
+  // Check Web Speech API support directly
+  const [webSpeechSupported, setWebSpeechSupported] = useState(false);
+  
+  useEffect(() => {
+    const checkSpeechSupport = () => {
+      const supported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+      console.log('Direct Web Speech API check:', {
+        SpeechRecognition: !!window.SpeechRecognition,
+        webkitSpeechRecognition: !!window.webkitSpeechRecognition,
+        supported
+      });
+      setWebSpeechSupported(supported);
+    };
+    
+    checkSpeechSupport();
+    // Check again after a delay in case it takes time to load
+    setTimeout(checkSpeechSupport, 500);
+  }, []);
+
   // Web Speech API for real-time transcription
   const { 
     isListening, 
@@ -560,10 +579,31 @@ function ClinicalNotesPage() {
       subscribeToTranscription(data.session_id);
       
       // Start speech recognition
-      if (isSupported) {
+      const speechSupported = isSupported || webSpeechSupported;
+      console.log('Speech recognition support status:', {
+        hookSupport: isSupported,
+        directSupport: webSpeechSupported,
+        finalSupport: speechSupported
+      });
+      
+      if (speechSupported) {
+        console.log('Starting speech recognition...');
         startListening();
       } else {
         console.warn('Speech recognition not supported in this browser');
+        // Try starting anyway in case it's a timing issue
+        setTimeout(() => {
+          const recheckSupport = isSupported || webSpeechSupported;
+          console.log('Rechecking speech support after delay:', {
+            hookSupport: isSupported,
+            directSupport: webSpeechSupported,
+            finalSupport: recheckSupport
+          });
+          if (recheckSupport) {
+            console.log('Speech recognition now supported, starting...');
+            startListening();
+          }
+        }, 500);
       }
       
       setIsLoadingEHR(false);
@@ -796,6 +836,15 @@ function ClinicalNotesPage() {
               </Box>
 
               <Box sx={{ p: 2, flex: 1, overflow: 'auto' }}>
+                {/* Debug: Show available sections */}
+                {process.env.NODE_ENV === 'development' && (
+                  <Box sx={{ mb: 2, p: 1, bgcolor: 'grey.100', borderRadius: 1 }}>
+                    <Typography variant="caption" color="text.secondary">
+                      Debug - Available sections: {Object.keys(sections).filter(k => sections[k]).join(', ') || 'none'}
+                    </Typography>
+                  </Box>
+                )}
+
                 {/* Chief Complaint */}
                 {(sections.chief_complaint || encounter?.chief_complaint) && (
                   <Accordion expanded defaultExpanded>
@@ -838,7 +887,8 @@ function ClinicalNotesPage() {
                     </AccordionSummary>
                     <AccordionDetails>
                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {sections.past_medical_history.split('\n\n').map((problem: string, index: number) => (
+                        {sections.past_medical_history && typeof sections.past_medical_history === 'string' 
+                          ? sections.past_medical_history.split('\n\n').map((problem: string, index: number) => (
                           <Box key={index} sx={{ 
                             p: 1.5, 
                             bgcolor: 'grey.50', 
@@ -850,7 +900,8 @@ function ClinicalNotesPage() {
                               {problem}
                             </Typography>
                           </Box>
-                        ))}
+                        ))
+                          : sections.past_medical_history}
                       </Box>
                     </AccordionDetails>
                   </Accordion>
@@ -915,6 +966,38 @@ function ClinicalNotesPage() {
                     <AccordionDetails>
                       <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
                         {sections.physical_examination}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Additional Notes */}
+                {sections.additional_notes && (
+                  <Accordion sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        ADDITIONAL NOTES
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.additional_notes}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Care Coordination */}
+                {sections.care_coordination && (
+                  <Accordion sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        CARE COORDINATION
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.care_coordination}
                       </Typography>
                     </AccordionDetails>
                   </Accordion>

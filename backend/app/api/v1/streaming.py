@@ -41,8 +41,12 @@ async def start_streaming_session(
 ):
     """Start a new streaming transcription session"""
     
-    logger.info(f"Starting streaming session for user {current_user.email}")
-    logger.info(f"Session data received: {session_data}")
+    try:
+        logger.info(f"Starting streaming session for user {current_user.email}")
+        logger.info(f"Session data received: {session_data}")
+    except Exception as e:
+        logger.error(f"Error in start_streaming_session: {str(e)}")
+        raise
     
     encounter_id = session_data.get("encounter_id")
     if not encounter_id:
@@ -67,7 +71,7 @@ async def start_streaming_session(
             'first_name': session_data.get('patient_first_name', 'Unknown'),
             'last_name': session_data.get('patient_last_name', 'Patient'),
             'date_of_birth': None,
-            'gender': session_data.get('patient_gender', 'unknown'),
+            'gender': session_data.get('patient_gender', 'UNKNOWN').upper(),
             'allergies': ehr_sections.get('allergies'),
             'smoking_history': ehr_sections.get('social_history')
         })()
@@ -87,24 +91,91 @@ async def start_streaming_session(
     else:
         # Try to find real encounter
         try:
+            # First try as UUID
             encounter_uuid = uuid.UUID(encounter_id)
             encounter = db.query(Encounter).filter(
                 Encounter.id == encounter_uuid,
                 Encounter.user_id == current_user.id
             ).first()
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid encounter_id format")
+            # If not a valid UUID, treat as temporary encounter
+            logger.warning(f"Invalid UUID format for encounter_id: {encounter_id}, treating as temporary")
+            encounter_id = f"temp-{encounter_id}"
+            
+            # Create temporary patient and encounter objects
+            ehr_sections = session_data.get("ehr_sections", {})
+            
+            patient = type('Patient', (), {
+                'id': str(uuid.uuid4()),
+                'ehr_id': session_data.get('patient_ehr_id', ''),
+                'mrn': session_data.get('patient_mrn', 'TEMP-MRN'),
+                'first_name': session_data.get('patient_first_name', 'Unknown'),
+                'last_name': session_data.get('patient_last_name', 'Patient'),
+                'date_of_birth': None,
+                'gender': session_data.get('patient_gender', 'UNKNOWN').upper(),
+                'allergies': ehr_sections.get('allergies'),
+                'smoking_history': ehr_sections.get('social_history')
+            })()
+            
+            encounter = type('Encounter', (), {
+                'id': encounter_id,
+                'patient_id': patient.id,
+                'patient': patient,
+                'user_id': current_user.id,
+                'chief_complaint': ehr_sections.get('chief_complaint', 'Medical consultation'),
+                'encounter_date': datetime.utcnow(),
+                'encounter_type': 'office_visit',
+                'provider_name': session_data.get('provider_name', current_user.full_name),
+                'location': session_data.get('location', 'Medical Office')
+            })()
         
-        if not encounter:
+        if not encounter and not encounter_id.startswith("temp-"):
             raise HTTPException(status_code=404, detail="Encounter not found")
         
         patient = encounter.patient
     
     # Create transcription record for streaming session
-    # For temporary encounters, create the transcription without a real encounter_id
+    # For temporary encounters, we need to create a real encounter first
     if encounter_id.startswith("temp-"):
+        # Create a temporary patient first or get existing one
+        from app.models.patient import Patient
+        
+        # Check if patient with this MRN already exists
+        existing_patient = db.query(Patient).filter(
+            Patient.mrn == patient.mrn
+        ).first()
+        
+        if existing_patient:
+            temp_patient = existing_patient
+            logger.info(f"Using existing patient with MRN: {patient.mrn}")
+        else:
+            temp_patient = Patient(
+                ehr_id=patient.ehr_id if hasattr(patient, 'ehr_id') else f"temp-ehr-{uuid.uuid4()}",
+                mrn=patient.mrn,
+                first_name=patient.first_name,
+                last_name=patient.last_name,
+                date_of_birth=patient.date_of_birth if hasattr(patient, 'date_of_birth') and patient.date_of_birth else datetime(1900, 1, 1).date(),
+                gender=patient.gender.upper() if patient.gender else 'UNKNOWN'
+            )
+            db.add(temp_patient)
+            db.flush()  # Get the patient ID
+        
+        # Create a real encounter for the temporary session
+        real_encounter = Encounter(
+            user_id=current_user.id,
+            patient_id=temp_patient.id,  # Use the temporary patient
+            chief_complaint=encounter.chief_complaint,
+            encounter_date=encounter.encounter_date,
+            encounter_type=encounter.encounter_type,
+            provider_name=encounter.provider_name,
+            location=encounter.location,
+            status="ACTIVE"
+        )
+        db.add(real_encounter)
+        db.flush()  # Flush to get the ID
+        
         transcription = Transcription(
-            encounter_id=None,  # No real encounter ID for temporary sessions
+            encounter_id=real_encounter.id,
             audio_file_path=None,  # No audio file for streaming
             status="streaming",
             progress=0
@@ -144,7 +215,7 @@ async def start_streaming_session(
             "first_name": patient.first_name,
             "last_name": patient.last_name,
             "date_of_birth": patient.date_of_birth.isoformat() if patient.date_of_birth else None,
-            "gender": patient.gender,
+            "gender": patient.gender.upper() if hasattr(patient, 'gender') and patient.gender else 'UNKNOWN',
             "age": _calculate_age(patient.date_of_birth) if patient.date_of_birth else None,
             "chief_complaint": encounter.chief_complaint,
             "encounter_date": encounter.encounter_date.isoformat(),
@@ -211,7 +282,22 @@ async def stream_text_chunk(
     # Update session context with new text
     context = handoff_context.get_context(session_id)
     if not context:
-        raise HTTPException(status_code=404, detail="Session context not found")
+        # If context is lost but transcription exists, check if we can recreate it
+        if transcription.status == "processing":
+            raise HTTPException(
+                status_code=409, 
+                detail="Session is already being processed. Cannot add more text."
+            )
+        elif transcription.status == "completed":
+            raise HTTPException(
+                status_code=409, 
+                detail="Session is already completed. Cannot add more text."
+            )
+        else:
+            raise HTTPException(
+                status_code=404, 
+                detail="Session context not found. Please start a new session."
+            )
     
     # Append to transcript chunks
     context["transcript_chunks"].append({
@@ -279,14 +365,29 @@ async def end_streaming_session(
     if transcription.encounter_id and transcription.encounter.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    # Update status
-    transcription.status = "processing"
-    db.commit()
+    # Check if session is already in final state
+    if transcription.status == "processing":
+        raise HTTPException(
+            status_code=409, 
+            detail="Session is already being processed."
+        )
+    elif transcription.status == "completed":
+        raise HTTPException(
+            status_code=409, 
+            detail="Session is already completed."
+        )
     
     # Get final transcript
     context = handoff_context.get_context(session_id)
     if not context:
-        raise HTTPException(status_code=404, detail="Session context not found")
+        raise HTTPException(
+            status_code=404, 
+            detail="Session context not found. Please start a new session."
+        )
+    
+    # Update status to processing
+    transcription.status = "processing"
+    db.commit()
     
     final_transcript = context.get("transcript", "")
     

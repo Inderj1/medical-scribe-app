@@ -18,6 +18,24 @@ logger = logging.getLogger(__name__)
 
 async def get_user_from_token(token: str, db: Session):
     """Get user from token query parameter (for SSE which doesn't support headers)"""
+    # Development bypass when DEBUG is True
+    from app.core.config import settings
+    if settings.DEBUG:
+        logger.info(f"DEBUG: SSE Authentication bypass active. Token received: {token[:20] if token else 'None'}...")
+        # Create or get a test user for development
+        test_user = db.query(User).filter(User.email == "test@example.com").first()
+        if not test_user:
+            test_user = User(
+                email="test@example.com",
+                first_name="Test",
+                last_name="User", 
+                is_active=True
+            )
+            db.add(test_user)
+            db.commit()
+            db.refresh(test_user)
+        return test_user
+    
     try:
         payload = decode_token(token)
         email = payload.get("sub")

@@ -4,7 +4,6 @@ from typing import Dict, Any, List
 from swarm import Agent
 
 from app.core.config import settings
-from app.core.sse_manager import sse_manager
 from app.agents.context_manager import handoff_context
 
 logger = logging.getLogger(__name__)
@@ -147,16 +146,15 @@ def generate_qa_report(session_id: str) -> str:
         "qa_status": "completed"
     })
     
-    # Send SSE update
+    # Store SSE update in context for later publishing
     transcription_id = handoff_context.get_from_context(session_id, "transcription_id")
     if transcription_id:
-        asyncio.create_task(
-            sse_manager.publish(
-                f"transcription:{transcription_id}",
-                "qa_complete",
-                qa_report
-            )
-        )
+        handoff_context.update_context(session_id, {
+            "pending_sse_event": {
+                "type": "qa_complete",
+                "data": qa_report
+            }
+        })
     
     return f"QA complete. Quality score: {qa_report['quality_score']:.2f}"
 
@@ -175,16 +173,15 @@ def complete_processing(session_id: str) -> str:
             "processing_complete": True
         }
         
-        # Send final SSE update
+        # Store final SSE update in context
         transcription_id = handoff_context.get_from_context(session_id, "transcription_id")
         if transcription_id:
-            asyncio.create_task(
-                sse_manager.publish(
-                    f"transcription:{transcription_id}",
-                    "completed",
-                    final_results
-                )
-            )
+            handoff_context.update_context(session_id, {
+                "pending_sse_event": {
+                    "type": "completed",
+                    "data": final_results
+                }
+            })
         
         # Update final status
         handoff_context.update_context(session_id, {
