@@ -293,15 +293,17 @@ run_migrations() {
         alembic init alembic 2>/dev/null || true
     fi
     
-    # Run migrations - use Docker database if available
+    # Run migrations with retry logic - use Docker database if available
     if docker-compose ps postgres | grep -q "Up"; then
         DATABASE_URL="postgresql://medscribe:medscribe_password@localhost:5432/medical_scribe_db" \
-        python -c "from app.db.session import engine; from app.db.base_class import Base; Base.metadata.create_all(bind=engine)" || {
-            print_warning "Migration failed - database might not be ready yet"
+        python run_migrations.py || {
+            print_error "Migration failed after multiple retries"
+            exit 1
         }
     else
-        python -c "from app.db.session import engine; from app.db.base_class import Base; Base.metadata.create_all(bind=engine)" || {
-            print_warning "Migration failed - database might not be ready yet"
+        python run_migrations.py || {
+            print_error "Migration failed after multiple retries"
+            exit 1
         }
     fi
     

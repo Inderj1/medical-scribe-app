@@ -178,14 +178,16 @@ async def start_streaming_session(
             encounter_id=real_encounter.id,
             audio_file_path=None,  # No audio file for streaming
             status="streaming",
-            progress=0
+            progress=0,
+            speaker_count=1  # Default to 1, will be updated if multiple speakers detected
         )
     else:
         transcription = Transcription(
             encounter_id=encounter.id,
             audio_file_path=None,  # No audio file for streaming
             status="streaming",
-            progress=0
+            progress=0,
+            speaker_count=1  # Default to 1, will be updated if multiple speakers detected
         )
     
     db.add(transcription)
@@ -197,6 +199,9 @@ async def start_streaming_session(
     
     # Include EHR data if provided in session_data
     ehr_sections = session_data.get("ehr_sections", {})
+    
+    # Initialize speaker tracking
+    enable_speaker_diarization = session_data.get("enable_speaker_diarization", False)
     logger.info(f"Received EHR sections for session {session_id}: {list(ehr_sections.keys()) if ehr_sections else 'None'}")
     if ehr_sections:
         for section, content in ehr_sections.items():
@@ -210,6 +215,9 @@ async def start_streaming_session(
         "format_preference": session_data.get("format_preference", "soap"),
         "streaming_mode": True,
         "transcript_chunks": [],
+        "speakers": set(),  # Track unique speakers
+        "speaker_count": 0,
+        "enable_speaker_diarization": enable_speaker_diarization,
         "patient_context": {
             "mrn": patient.mrn,
             "first_name": patient.first_name,
@@ -274,10 +282,13 @@ async def stream_text_chunk(
     if transcription.encounter_id and transcription.encounter.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    # Get text chunk
+    # Get text chunk with speaker info
     text_chunk = text_data.get("text", "")
     is_final = text_data.get("is_final", False)
     timestamp = text_data.get("timestamp", datetime.utcnow().isoformat())
+    speaker_id = text_data.get("speaker_id", "SPEAKER_00")  # Default speaker
+    
+    logger.info(f"[STREAMING] Received text chunk for session {session_id}: '{text_chunk}' (is_final: {is_final}, speaker: {speaker_id})")
     
     # Update session context with new text
     context = handoff_context.get_context(session_id)
@@ -299,21 +310,32 @@ async def stream_text_chunk(
                 detail="Session context not found. Please start a new session."
             )
     
+    # Initialize speaker tracking if needed
+    if "speakers" not in context:
+        context["speakers"] = set()
+    context["speakers"].add(speaker_id)
+    
     # Append to transcript chunks
     context["transcript_chunks"].append({
         "text": text_chunk,
         "timestamp": timestamp,
-        "is_final": is_final
+        "is_final": is_final,
+        "speaker_id": speaker_id
     })
     
     # Update full transcript
     full_transcript = " ".join([chunk["text"] for chunk in context["transcript_chunks"]])
     context["transcript"] = full_transcript
+    context["speaker_count"] = len(context["speakers"])
     handoff_context.update_context(session_id, context)
+    
+    logger.info(f"[STREAMING] Updated transcript - Total chunks: {len(context['transcript_chunks'])}, Full transcript length: {len(full_transcript)} chars")
     
     # Update database
     transcription.transcript = full_transcript
     transcription.updated_at = datetime.utcnow()
+    if context["speaker_count"] > 1:
+        transcription.speaker_count = context["speaker_count"]
     db.commit()
     
     # Notify via SSE
@@ -324,20 +346,26 @@ async def stream_text_chunk(
             "chunk": text_chunk,
             "is_final": is_final,
             "timestamp": timestamp,
-            "total_length": len(full_transcript)
+            "total_length": len(full_transcript),
+            "speaker_id": speaker_id,
+            "speaker_count": context["speaker_count"]
         }
     })
     
     # If we have enough text, trigger agent processing
     word_count = len(full_transcript.split())
+    logger.info(f"[STREAMING] Current transcript word count: {word_count} words")
     if word_count >= 50 and word_count % 50 == 0:  # Process every 50 words
+        logger.info(f"[STREAMING] Triggering incremental analysis at {word_count} words")
         # Trigger agent analysis in background
         await _trigger_incremental_analysis(session_id, full_transcript)
     
     return {
         "status": "received",
         "chunk_length": len(text_chunk),
-        "total_length": len(full_transcript)
+        "total_length": len(full_transcript),
+        "speaker_id": speaker_id,
+        "speaker_count": context["speaker_count"]
     }
 
 
@@ -380,6 +408,7 @@ async def end_streaming_session(
     # Get final transcript
     context = handoff_context.get_context(session_id)
     if not context:
+        logger.error(f"[STREAMING] No context found for session {session_id}")
         raise HTTPException(
             status_code=404, 
             detail="Session context not found. Please start a new session."
@@ -390,6 +419,9 @@ async def end_streaming_session(
     db.commit()
     
     final_transcript = context.get("transcript", "")
+    logger.info(f"[STREAMING] End session {session_id} - Transcript length: {len(final_transcript)} chars, Word count: {len(final_transcript.split()) if final_transcript else 0} words")
+    logger.info(f"[STREAMING] Transcript preview: {final_transcript[:200]}..." if final_transcript else "[STREAMING] Empty transcript!")
+    logger.info(f"[STREAMING] Transcript chunks count: {len(context.get('transcript_chunks', []))}")
     
     # Notify via SSE
     channel = f"transcription:{session_id}"
@@ -550,25 +582,41 @@ async def websocket_streaming(
                 # Process text chunk
                 text_chunk = data.get("text", "")
                 is_final = data.get("is_final", False)
+                speaker_id = data.get("speaker_id", "SPEAKER_00")  # Default speaker
                 
                 # Update context
                 context = handoff_context.get_context(session_id)
                 if context:
+                    # Initialize speaker tracking if needed
+                    if "speakers" not in context:
+                        context["speakers"] = set()
+                    context["speakers"].add(speaker_id)
+                    
                     context["transcript_chunks"].append({
                         "text": text_chunk,
                         "timestamp": datetime.utcnow().isoformat(),
-                        "is_final": is_final
+                        "is_final": is_final,
+                        "speaker_id": speaker_id
                     })
                     
+                    # Build full transcript with speaker labels
                     full_transcript = " ".join([chunk["text"] for chunk in context["transcript_chunks"]])
                     context["transcript"] = full_transcript
+                    context["speaker_count"] = len(context["speakers"])
                     handoff_context.update_context(session_id, context)
                     
-                    # Send acknowledgment
+                    # Update transcription with speaker count
+                    if context["speaker_count"] > 1:
+                        transcription.speaker_count = context["speaker_count"]
+                        db.commit()
+                    
+                    # Send acknowledgment with speaker info
                     await websocket.send_json({
                         "type": "ack",
                         "chunk_received": len(text_chunk),
-                        "total_length": len(full_transcript)
+                        "total_length": len(full_transcript),
+                        "speaker_id": speaker_id,
+                        "speaker_count": context["speaker_count"]
                     })
                     
             elif data.get("type") == "end_session":

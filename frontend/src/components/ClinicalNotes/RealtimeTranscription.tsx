@@ -33,6 +33,13 @@ interface RealtimeTranscriptionProps {
 
 type NoteFormat = 'soap' | 'bullet' | 'narrative';
 
+interface TranscriptionSegment {
+  text: string;
+  speaker_id: string;
+  speaker_role?: 'healthcare_provider' | 'patient' | 'nurse' | 'other';
+  timestamp: string;
+}
+
 const RealtimeTranscription: React.FC<RealtimeTranscriptionProps> = ({
   encounterId,
   patientId,
@@ -46,6 +53,9 @@ const RealtimeTranscription: React.FC<RealtimeTranscriptionProps> = ({
   const [isRecording, setIsRecording] = useState(false);
   const [currentTranscription, setCurrentTranscription] = useState('');
   const [fullTranscription, setFullTranscription] = useState('');
+  const [transcriptionSegments, setTranscriptionSegments] = useState<TranscriptionSegment[]>([]);
+  const [currentSpeaker, setCurrentSpeaker] = useState<string>('');
+  const [speakerCount, setSpeakerCount] = useState(0);
   const [noteFormat, setNoteFormat] = useState<NoteFormat>('soap');
   const [error, setError] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
@@ -117,15 +127,36 @@ const RealtimeTranscription: React.FC<RealtimeTranscriptionProps> = ({
   
   const handleTranscription = (event: TranscriptionEvent) => {
     if (event.type === 'partial') {
-      // Update partial transcription
+      // Update partial transcription with speaker
       partialTextRef.current = event.text;
       setCurrentTranscription(event.text);
+      if (event.speaker_id) {
+        setCurrentSpeaker(event.speaker_id);
+      }
+      if (event.speaker_count) {
+        setSpeakerCount(event.speaker_count);
+      }
     } else if (event.type === 'complete') {
-      // Add to full transcription
+      // Add to transcription segments
+      const newSegment: TranscriptionSegment = {
+        text: event.text,
+        speaker_id: event.speaker_id || 'SPEAKER_00',
+        speaker_role: event.speaker_role,
+        timestamp: event.timestamp
+      };
+      
+      setTranscriptionSegments(prev => [...prev, newSegment]);
+      
+      // Update full transcription
       const newText = event.text;
       setFullTranscription(prev => prev + (prev ? ' ' : '') + newText);
       setCurrentTranscription(''); // Clear partial
       partialTextRef.current = '';
+      
+      // Update speaker count
+      if (event.speaker_count) {
+        setSpeakerCount(event.speaker_count);
+      }
       
       // Notify parent with analysis
       if (onTranscriptionUpdate) {
@@ -161,6 +192,20 @@ const RealtimeTranscription: React.FC<RealtimeTranscriptionProps> = ({
     }
   };
   
+  // Helper function to get speaker label and color
+  const getSpeakerInfo = (speaker_id: string, role?: string) => {
+    const speakerColors = ['#1976d2', '#388e3c', '#d32f2f', '#f57c00', '#7b1fa2'];
+    const speakerIndex = parseInt(speaker_id.replace('SPEAKER_', '')) || 0;
+    const color = speakerColors[speakerIndex % speakerColors.length];
+    
+    let label = speaker_id;
+    if (role === 'healthcare_provider') label = 'Provider';
+    else if (role === 'patient') label = 'Patient';
+    else if (role === 'nurse') label = 'Nurse';
+    
+    return { label, color };
+  };
+  
   return (
     <Paper elevation={2} sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
@@ -178,6 +223,15 @@ const RealtimeTranscription: React.FC<RealtimeTranscriptionProps> = ({
               color={connectionStatus === 'connected' ? 'success' : 'default'}
               variant={connectionStatus === 'connecting' ? 'outlined' : 'filled'}
             />
+            
+            {/* Speaker Count */}
+            {speakerCount > 0 && (
+              <Chip
+                size="small"
+                label={`${speakerCount} speaker${speakerCount > 1 ? 's' : ''}`}
+                variant="outlined"
+              />
+            )}
             
             {/* Format Selection */}
             <ToggleButtonGroup
@@ -231,28 +285,59 @@ const RealtimeTranscription: React.FC<RealtimeTranscriptionProps> = ({
           position: 'relative'
         }}
       >
-        {/* Full Transcription */}
-        {fullTranscription && (
-          <Typography variant="body1" paragraph>
-            {fullTranscription}
-          </Typography>
-        )}
+        {/* Transcription Segments with Speaker Attribution */}
+        {transcriptionSegments.map((segment, index) => {
+          const speakerInfo = getSpeakerInfo(segment.speaker_id, segment.speaker_role);
+          return (
+            <Box key={index} sx={{ mb: 2 }}>
+              <Chip
+                size="small"
+                label={speakerInfo.label}
+                sx={{
+                  bgcolor: speakerInfo.color,
+                  color: 'white',
+                  mb: 0.5,
+                  fontWeight: 'medium'
+                }}
+              />
+              <Typography variant="body1" sx={{ ml: 1 }}>
+                {segment.text}
+              </Typography>
+            </Box>
+          );
+        })}
         
         {/* Current/Partial Transcription */}
         {currentTranscription && (
-          <Typography 
-            variant="body1" 
-            sx={{ 
-              color: 'text.secondary',
-              fontStyle: 'italic'
-            }}
-          >
-            {currentTranscription}
-          </Typography>
+          <Box sx={{ mt: 2 }}>
+            {currentSpeaker && (
+              <Chip
+                size="small"
+                label={getSpeakerInfo(currentSpeaker).label}
+                sx={{
+                  bgcolor: getSpeakerInfo(currentSpeaker).color,
+                  color: 'white',
+                  mb: 0.5,
+                  fontWeight: 'medium',
+                  opacity: 0.7
+                }}
+              />
+            )}
+            <Typography 
+              variant="body1" 
+              sx={{ 
+                color: 'text.secondary',
+                fontStyle: 'italic',
+                ml: 1
+              }}
+            >
+              {currentTranscription}
+            </Typography>
+          </Box>
         )}
         
         {/* Empty State */}
-        {!fullTranscription && !currentTranscription && !isRecording && (
+        {transcriptionSegments.length === 0 && !currentTranscription && !isRecording && (
           <Typography variant="body2" color="text.secondary" align="center">
             Click the microphone to start real-time transcription
           </Typography>

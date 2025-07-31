@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Box, 
   Grid, 
@@ -75,6 +75,30 @@ interface EncounterData {
   notes?: string;
 }
 
+// Map backend section names to frontend section names
+const SECTION_NAME_MAP: Record<string, string> = {
+  // SOAP format mappings
+  'soap_subjective': 'history_present_illness',
+  'soap_objective': 'physical_examination',
+  'soap_assessment': 'assessment',
+  'soap_plan': 'plan',
+  // Direct mappings
+  'chief_complaint': 'chief_complaint',
+  'history_present_illness': 'history_present_illness',
+  'past_medical_history': 'past_medical_history',
+  'medications': 'medications',
+  'allergies': 'allergies',
+  'social_history': 'social_history',
+  'family_history': 'family_history',
+  'review_of_systems': 'review_of_systems',
+  'physical_examination': 'physical_examination',
+  'assessment': 'assessment',
+  'plan': 'plan',
+  'diagnostic_results': 'diagnostic_results',
+  'care_coordination': 'care_coordination',
+  'vital_signs': 'vital_signs'
+};
+
 function ClinicalNotesPage() {
   const navigate = useNavigate();
   const { selectedPatient, selectedEncounter, recentVitals, setSelectedEncounter } = usePatient();
@@ -82,6 +106,8 @@ function ClinicalNotesPage() {
   
   // State and refs
   const [currentTranscriptionId, setCurrentTranscriptionId] = useState<string | null>(null);
+  const sessionEndedRef = useRef(false);
+  const isStartingSession = useRef(false);
 
   // Define handleEndSession function before useWebSpeech hook
   const handleEndSession = async () => {
@@ -89,18 +115,35 @@ function ClinicalNotesPage() {
       console.log('No active session to end');
       return;
     }
+    
+    // Check if session was already ended
+    if (sessionEndedRef.current) {
+      console.log('Session already ended, skipping duplicate end call');
+      return;
+    }
 
     try {
-      const token = await (window as any).Clerk?.session?.getToken();
+      let token;
+      try {
+        token = await (window as any).Clerk?.session?.getToken();
+      } catch (authError) {
+        console.warn('Failed to get auth token, proceeding without authentication:', authError);
+        // Continue without token - the backend will handle unauthorized requests
+      }
+      
       const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/end`, {
         method: 'POST',
-        headers: {
+        headers: token ? {
           'Authorization': `Bearer ${token}`,
-        },
+        } : {},
       });
 
       if (response.ok) {
         console.log('Session ended successfully, agents will now process the transcript');
+        sessionEndedRef.current = true;
+      } else if (response.status === 409) {
+        console.log('Session already ended or being processed');
+        sessionEndedRef.current = true;
       } else {
         console.error('Failed to end session:', response.statusText);
       }
@@ -142,25 +185,58 @@ function ClinicalNotesPage() {
     language: 'en-US',
     silenceTimeoutMs: 5000, // 5 seconds of silence ends session
     onTranscript: async (text, isFinal) => {
-      if (currentTranscriptionId && isFinal) {
+      console.log('[SPEECH] Transcript received:', {
+        text,
+        isFinal,
+        currentTranscriptionId,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Only send if we have an active session and it's not ended
+      if (currentTranscriptionId && isFinal && !sessionEndedRef.current) {
         // Send text chunk to backend
         try {
           const token = await (window as any).Clerk?.session?.getToken();
-          await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/text`, {
+          const payload = {
+            text,
+            is_final: isFinal,
+            timestamp: new Date().toISOString(),
+            speaker_id: 'SPEAKER_01', // Default speaker for browser-based recording
+          };
+          
+          console.log('[SPEECH] Sending text chunk to backend:', {
+            url: `${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/text`,
+            payload
+          });
+          
+          const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/text`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${token}`,
             },
-            body: JSON.stringify({
-              text,
-              is_final: isFinal,
-              timestamp: new Date().toISOString(),
-            }),
+            body: JSON.stringify(payload),
           });
+          
+          if (response.ok) {
+            const result = await response.json();
+            console.log('[SPEECH] Text chunk sent successfully:', result);
+          } else {
+            console.error('[SPEECH] Failed to send text chunk:', {
+              status: response.status,
+              statusText: response.statusText,
+              body: await response.text()
+            });
+          }
         } catch (error) {
-          console.error('Failed to send text chunk:', error);
+          console.error('[SPEECH] Error sending text chunk:', error);
         }
+      } else {
+        console.log('[SPEECH] Skipping transcript send:', {
+          hasTranscriptionId: !!currentTranscriptionId,
+          isFinal,
+          reason: !currentTranscriptionId ? 'No transcription ID' : 'Not final'
+        });
       }
     },
     onSilenceTimeout: async () => {
@@ -170,6 +246,12 @@ function ClinicalNotesPage() {
     onEnd: async () => {
       console.log('Speech recognition ended, triggering clinical analysis...');
       await handleEndSession();
+    },
+    onError: (error: string) => {
+      // Don't end session for network errors - they'll auto-recover
+      if (error !== 'network') {
+        console.error('Speech recognition error:', error);
+      }
     },
   });
 
@@ -267,32 +349,80 @@ function ClinicalNotesPage() {
   useEffect(() => {
     // Handle SSE events
     if (lastEvent) {
-      console.log('SSE Event received:', lastEvent);
+      console.log('[SSE] Event received:', {
+        type: lastEvent.type,
+        data: lastEvent.data,
+        timestamp: new Date().toISOString()
+      });
       
       switch (lastEvent.type) {
         case 'processing_started':
+          console.log('[SSE] Processing started');
           setIsLoadingEHR(false);
-                break;
+          break;
           
         case 'progress':
+          console.log('[SSE] Progress update:', {
+            progress: lastEvent.data.progress,
+            message: lastEvent.data.message
+          });
           setTranscriptionProgress(lastEvent.data.progress);
-          if (lastEvent.data.message) {
-            console.log('Progress update:', lastEvent.data.message);
-          }
           break;
           
         case 'transcription_chunk':
           // Handle real-time transcription chunks
-          console.log('Transcription chunk:', lastEvent.data);
+          console.log('[SSE] Transcription chunk received:', {
+            chunk: lastEvent.data,
+            timestamp: new Date().toISOString()
+          });
           break;
           
         case 'section_completed':
           // Handle section completion from agents
           const { section, content, confidence } = lastEvent.data;
-          setSections((prev: any) => ({
-            ...prev,
-            [section]: content
-          }));
+          console.log('[SSE] Section completed:', {
+            section,
+            content: content ? content.substring(0, 100) + '...' : 'empty',
+            confidence,
+            timestamp: new Date().toISOString()
+          });
+          
+          // Map backend section name to frontend section name
+          const mappedSection = SECTION_NAME_MAP[section] || 'additional_notes';
+          console.log('[SSE] Section mapping:', {
+            backendSection: section,
+            frontendSection: mappedSection,
+            isKnownSection: !!SECTION_NAME_MAP[section]
+          });
+          
+          setSections((prev: any) => {
+            let updated;
+            
+            if (mappedSection === 'additional_notes') {
+              // For unmapped sections, append to additional notes with formatting
+              const existingNotes = prev.additional_notes || '';
+              const timestamp = new Date().toLocaleTimeString();
+              const formattedContent = `[${timestamp}] ${section.replace(/_/g, ' ').toUpperCase()}:\n${content}\n\n`;
+              updated = {
+                ...prev,
+                additional_notes: existingNotes + formattedContent
+              };
+            } else {
+              // For mapped sections, replace content
+              updated = {
+                ...prev,
+                [mappedSection]: content
+              };
+            }
+            
+            console.log('[SSE] Updated sections state:', {
+              previousKeys: Object.keys(prev),
+              newKeys: Object.keys(updated),
+              updatedSection: mappedSection,
+              isAdditionalNotes: mappedSection === 'additional_notes'
+            });
+            return updated;
+          });
           
           setActiveAgents((prev) => {
             const existing = prev.find(a => a.section === section);
@@ -310,29 +440,39 @@ function ClinicalNotesPage() {
             }];
           });
           
-          setCurrentSection(section);
+          setCurrentSection(mappedSection);
           break;
           
         case 'completed':
+          console.log('[SSE] Processing completed:', {
+            data: lastEvent.data,
+            timestamp: new Date().toISOString()
+          });
           setIsLoadingEHR(false);
           setTranscriptionProgress(100);
-          console.log('Transcription completed:', lastEvent.data);
           break;
           
         case 'error':
+          console.error('[SSE] Error received:', {
+            error: lastEvent.data.error,
+            timestamp: new Date().toISOString()
+          });
           setIsLoadingEHR(false);
-          console.error('Transcription error:', lastEvent.data.error);
           break;
+          
+        default:
+          console.log('[SSE] Unknown event type:', lastEvent.type);
       }
     }
   }, [lastEvent]);
 
   // Load EHR data when patient is selected
   useEffect(() => {
-    if (patient?.id) {
+    if (patient?.id && !currentTranscriptionId) {
+      console.log('[SESSION] Starting clinical notes for patient:', patient.id);
       handleStartClinicalNotes();
     }
-  }, [patient?.id]);
+  }, [patient?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     // Auto-save draft every 5 minutes
@@ -342,24 +482,42 @@ function ClinicalNotesPage() {
 
     return () => {
       clearInterval(autoSaveInterval);
-      
-      // Stop listening if active
-      if (isListening) {
-        stopListening();
-      }
-      
-      // End streaming session if active
+    };
+  }, []);
+
+  // Separate effect for cleanup when component unmounts or transcription changes
+  useEffect(() => {
+    return () => {
+      // Only clean up on unmount or when transcription ID changes
       if (currentTranscriptionId) {
+        console.log('[CLEANUP] Component unmounting or transcription changing, cleaning up session:', currentTranscriptionId);
+        
+        // Stop listening if active
+        if (isListening) {
+          stopListening();
+        }
+        
         // End the streaming session
         (async () => {
           try {
-            const token = await (window as any).Clerk?.session?.getToken();
-            await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/end`, {
+            let token;
+            try {
+              token = await (window as any).Clerk?.session?.getToken();
+            } catch (authError) {
+              console.warn('Failed to get auth token during cleanup:', authError);
+            }
+            
+            const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/end`, {
               method: 'POST',
-              headers: {
+              headers: token ? {
                 'Authorization': `Bearer ${token}`,
-              },
+              } : {},
             });
+            
+            // Ignore 409 conflicts as they mean the session is already ended/processing
+            if (!response.ok && response.status !== 409) {
+              console.error('Failed to end streaming session:', response.statusText);
+            }
           } catch (error) {
             console.error('Failed to end streaming session:', error);
           }
@@ -369,7 +527,7 @@ function ClinicalNotesPage() {
         unsubscribeFromTranscription(currentTranscriptionId);
       }
     };
-  }, [currentTranscriptionId, unsubscribeFromTranscription, isListening, stopListening]);
+  }, [currentTranscriptionId]); // Only depend on transcriptionId, not other values
 
   const handleSaveDraft = async () => {
     // Save draft logic
@@ -394,6 +552,13 @@ function ClinicalNotesPage() {
       return;
     }
     
+    // Prevent duplicate session creation
+    if (currentTranscriptionId || isStartingSession.current) {
+      console.log('[SESSION] Session already active or starting:', currentTranscriptionId);
+      return;
+    }
+    
+    isStartingSession.current = true;
     setIsLoadingEHR(true);
     
     // Initialize ehrData in the function scope
@@ -435,18 +600,29 @@ function ClinicalNotesPage() {
               console.log('Fetching sections for record ID:', recordId);
               
               try {
-                // Fetch all sections
+                // Fetch all sections - these may not exist for all records
                 const [historySection, examinationSection, assessmentSection, planSection] = await Promise.all([
-                  ehrbaseAPI.getRecordSection(recordId, 'history').catch(e => null),
-                  ehrbaseAPI.getRecordSection(recordId, 'examination').catch(e => null),
-                  ehrbaseAPI.getRecordSection(recordId, 'assessment').catch(e => null),
-                  ehrbaseAPI.getRecordSection(recordId, 'plan').catch(e => null)
+                  ehrbaseAPI.getRecordSection(recordId, 'history').catch(e => {
+                    console.log('History section not available for this record');
+                    return null;
+                  }),
+                  ehrbaseAPI.getRecordSection(recordId, 'examination').catch(e => {
+                    console.log('Examination section not available for this record');
+                    return null;
+                  }),
+                  ehrbaseAPI.getRecordSection(recordId, 'assessment').catch(e => {
+                    console.log('Assessment section not available for this record');
+                    return null;
+                  }),
+                  ehrbaseAPI.getRecordSection(recordId, 'plan').catch(e => {
+                    console.log('Plan section not available for this record');
+                    return null;
+                  })
                 ]);
                 
-                console.log('History section:', historySection);
-                console.log('Examination section:', examinationSection);
-                console.log('Assessment section:', assessmentSection);
-                console.log('Plan section:', planSection);
+                if (historySection || examinationSection || assessmentSection || planSection) {
+                  console.log('Successfully fetched some sections from EHR');
+                }
                 
                 if (historySection) {
                   recentHistory = historySection.content || historySection.text || historySection.history_present_illness || recentHistory;
@@ -541,6 +717,9 @@ function ClinicalNotesPage() {
       // Use existing encounter ID or create a temporary one
       let encounterId = encounter?.id || `temp-${Date.now()}`;
       
+      // Reset session ended flag for new session
+      sessionEndedRef.current = false;
+      
       // Start streaming session with agent system
       const token = await (window as any).Clerk?.session?.getToken();
       console.log('Starting streaming session with encounter:', encounterId);
@@ -554,6 +733,7 @@ function ClinicalNotesPage() {
         body: JSON.stringify({
           encounter_id: encounterId,
           format_preference: 'soap',
+          enable_speaker_diarization: true, // Enable multi-speaker support
           ehr_sections: ehrData || {}, // Send the actual EHR data that was fetched, not current UI sections
           // Include patient info for temporary encounters
           patient_ehr_id: patient.ehr_id,
@@ -575,14 +755,43 @@ function ClinicalNotesPage() {
       console.log('Streaming session started:', data);
       
       // Subscribe to SSE updates
+      console.log('[SESSION] Setting transcription ID and subscribing to SSE:', {
+        sessionId: data.session_id,
+        timestamp: new Date().toISOString()
+      });
       setCurrentTranscriptionId(data.session_id);
-      subscribeToTranscription(data.session_id);
+      
+      // Subscribe to SSE and wait for connection
+      await subscribeToTranscription(data.session_id);
+      console.log('[SESSION] SSE subscription initiated for session:', data.session_id);
+      
+      // Wait a bit for SSE connection to establish
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      console.log('[SESSION] Waited for SSE connection');
+      
+      // Check connection status
+      console.log('[SESSION] SSE connection status after wait:', connectionStatus);
+      
+      // Monitor connection status changes
+      const checkConnection = setInterval(() => {
+        console.log('[SESSION] Current SSE status:', connectionStatus);
+        if (connectionStatus === 'connected') {
+          console.log('[SESSION] SSE connected successfully!');
+          clearInterval(checkConnection);
+        }
+      }, 500);
+      
+      // Clear the interval after 5 seconds
+      setTimeout(() => clearInterval(checkConnection), 5000);
       
       // Start speech recognition
-      const speechSupported = isSupported || webSpeechSupported;
-      console.log('Speech recognition support status:', {
+      // Check support directly as state might not be updated yet
+      const directCheck = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+      const speechSupported = isSupported || webSpeechSupported || directCheck;
+      console.log('[SESSION] Speech recognition support status:', {
         hookSupport: isSupported,
         directSupport: webSpeechSupported,
+        directCheck: directCheck,
         finalSupport: speechSupported
       });
       
@@ -593,10 +802,12 @@ function ClinicalNotesPage() {
         console.warn('Speech recognition not supported in this browser');
         // Try starting anyway in case it's a timing issue
         setTimeout(() => {
-          const recheckSupport = isSupported || webSpeechSupported;
+          // Re-check support directly
+          const currentSupport = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+          const recheckSupport = isSupported || currentSupport;
           console.log('Rechecking speech support after delay:', {
             hookSupport: isSupported,
-            directSupport: webSpeechSupported,
+            directSupport: currentSupport,
             finalSupport: recheckSupport
           });
           if (recheckSupport) {
@@ -607,10 +818,12 @@ function ClinicalNotesPage() {
       }
       
       setIsLoadingEHR(false);
+      isStartingSession.current = false;
         
     } catch (error) {
       console.error('Failed to start clinical notes:', error);
       setIsLoadingEHR(false);
+      isStartingSession.current = false;
     }
   };
 
@@ -747,7 +960,20 @@ function ClinicalNotesPage() {
                       transform: 'scale(1.05)'
                     }
                   }}
-                  onClick={() => isListening ? stopListening() : startListening()}
+                  onClick={async () => {
+                    if (isListening) {
+                      stopListening();
+                      if (currentTranscriptionId) {
+                        handleEndSession();
+                      }
+                    } else {
+                      // Start a new session when microphone is clicked
+                      if (!currentTranscriptionId || sessionEndedRef.current) {
+                        await handleStartClinicalNotes();
+                      }
+                      startListening();
+                    }
+                  }}
                   >
                     <MicIcon sx={{ 
                       fontSize: 40, 
@@ -759,6 +985,29 @@ function ClinicalNotesPage() {
                   <Typography variant="h6" sx={{ opacity: 0.9, mb: 1 }}>
                     {isListening ? 'Listening...' : 'Ready to Transcribe'}
                   </Typography>
+                  
+                  {/* Add visible Stop button when recording */}
+                  {isListening && (
+                    <Button
+                      variant="contained"
+                      color="error"
+                      size="medium"
+                      onClick={() => {
+                        console.log('[UI] Stop button clicked');
+                        stopListening();
+                        if (currentTranscriptionId) {
+                          handleEndSession();
+                        }
+                      }}
+                      sx={{ 
+                        mb: 2,
+                        minWidth: 120,
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      Stop Recording
+                    </Button>
+                  )}
                   
                   {!isSupported && (
                     <Alert severity="warning" sx={{ mx: 2 }}>
@@ -971,21 +1220,51 @@ function ClinicalNotesPage() {
                   </Accordion>
                 )}
 
-                {/* Additional Notes */}
-                {sections.additional_notes && (
+                {/* Social History */}
+                {sections.social_history && (
                   <Accordion sx={{ mt: 1 }}>
                     <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                       <Typography variant="subtitle1" fontWeight={600}>
-                        ADDITIONAL NOTES
+                        SOCIAL HISTORY
                       </Typography>
                     </AccordionSummary>
                     <AccordionDetails>
                       <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                        {sections.additional_notes}
+                        {sections.social_history}
                       </Typography>
                     </AccordionDetails>
                   </Accordion>
                 )}
+
+                {/* Family History */}
+                {sections.family_history && (
+                  <Accordion sx={{ mt: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="subtitle1" fontWeight={600}>
+                        FAMILY HISTORY
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {sections.family_history}
+                      </Typography>
+                    </AccordionDetails>
+                  </Accordion>
+                )}
+
+                {/* Additional Notes - Always visible */}
+                <Accordion defaultExpanded sx={{ mt: 1 }}>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Typography variant="subtitle1" fontWeight={600}>
+                      ADDITIONAL NOTES
+                    </Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {sections.additional_notes || 'Any unmapped or supplementary information will appear here...'}
+                    </Typography>
+                  </AccordionDetails>
+                </Accordion>
 
                 {/* Care Coordination */}
                 {sections.care_coordination && (

@@ -50,6 +50,8 @@ def extract_clinical_sections(session_id: str) -> Agent:
     try:
         transcript = handoff_context.get_from_context(session_id, "transcript", "")
         patient_context = handoff_context.get_from_context(session_id, "patient_context", {})
+        speaker_segments = handoff_context.get_from_context(session_id, "speaker_segments", [])
+        speaker_roles = handoff_context.get_from_context(session_id, "speaker_roles", {})
         
         # Handle empty transcript
         if not transcript or not transcript.strip():
@@ -62,9 +64,17 @@ def extract_clinical_sections(session_id: str) -> Agent:
             return note_structuring_agent
         ehr_sections = handoff_context.get_from_context(session_id, "ehr_sections", {})
         
-        system_prompt = """You are a medical scribe AI assistant. Extract and structure clinical information from the transcript into these exact JSON keys:
+        # Prepare speaker context for the prompt
+        speaker_context = ""
+        if speaker_roles:
+            speaker_context = "\n\nSpeaker Information:\n"
+            for speaker_id, role in speaker_roles.items():
+                speaker_context += f"- {speaker_id}: {role}\n"
+        
+        system_prompt = f"""You are a medical scribe AI assistant. Extract and structure clinical information from the transcript into these exact JSON keys.
+{speaker_context}
 
-{
+{{
   "chief_complaint": "Patient's main concern or reason for visit",
   "history_present_illness": "Detailed history of the present illness",
   "review_of_systems": "Systematic review of symptoms by body system",
@@ -80,7 +90,7 @@ def extract_clinical_sections(session_id: str) -> Agent:
   "plan": "Treatment plan and follow-up recommendations",
   "additional_notes": "Other relevant information that doesn't fit in standard sections",
   "care_coordination": "Communication with other providers, referrals, care team notes"
-}
+}}
 
 For each section:
 - Extract relevant information from the transcript

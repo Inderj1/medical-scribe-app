@@ -250,8 +250,11 @@ class EHRBaseAPI {
     try {
       const response = await axios.get(`${EHR_DIRECT_URL}/api/records/${recordId}/sections/${section}`);
       return response.data;
-    } catch (error) {
-      console.error(`Failed to get ${section} section:`, error);
+    } catch (error: any) {
+      // Don't log 404 errors as they're expected when sections don't exist
+      if (error?.response?.status !== 404) {
+        console.error(`Failed to get ${section} section:`, error);
+      }
       throw error;
     }
   }

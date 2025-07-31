@@ -156,14 +156,23 @@ export const useWebSpeech = (options: UseWebSpeechOptions = {}): UseWebSpeechRet
           clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = null;
         }
+        
+        // Handle network errors specifically
+        if (event.error === 'network') {
+          console.log('Network error detected, will retry when connection is restored');
+          // Don't call onError for network issues to avoid stopping the session
+          // The browser will handle reconnection automatically
+          return;
+        }
+        
         if (onError) {
           onError(event.error);
         }
 
         // Auto-restart for certain errors
-        if (event.error === 'no-speech' || event.error === 'audio-capture') {
+        if (event.error === 'no-speech' || event.error === 'audio-capture' || event.error === 'network') {
           setTimeout(() => {
-            if (recognitionRef.current) {
+            if (recognitionRef.current && event.error !== 'network') {
               try {
                 recognitionRef.current.start();
               } catch (e) {

@@ -25,12 +25,17 @@ def start_text_processing(session_id: str, initial_text: str = "") -> str:
     return f"Started text processing for session {session_id}"
 
 
-def process_text_chunk(session_id: str, text_chunk: str, is_final: bool = False) -> str:
-    """Process a chunk of transcribed text"""
+def process_text_chunk(session_id: str, text_chunk: str, is_final: bool = False, speaker_id: str = "SPEAKER_00") -> str:
+    """Process a chunk of transcribed text with speaker attribution"""
     try:
         # Get existing transcript
         existing_transcript = handoff_context.get_from_context(
             session_id, "transcript", ""
+        )
+        
+        # Get speaker tracking
+        speaker_segments = handoff_context.get_from_context(
+            session_id, "speaker_segments", []
         )
         
         # Append new text
@@ -39,13 +44,23 @@ def process_text_chunk(session_id: str, text_chunk: str, is_final: bool = False)
         else:
             full_transcript = text_chunk.strip()
         
+        # Track speaker segment
+        speaker_segments.append({
+            "speaker_id": speaker_id,
+            "text": text_chunk.strip(),
+            "start_index": len(existing_transcript),
+            "end_index": len(full_transcript)
+        })
+        
         # Update context
         word_count = len(full_transcript.split())
         handoff_context.update_context(session_id, {
             "transcript": full_transcript,
             "word_count": word_count,
             "last_chunk": text_chunk,
-            "is_final_chunk": is_final
+            "last_speaker": speaker_id,
+            "is_final_chunk": is_final,
+            "speaker_segments": speaker_segments
         })
         
         # Store SSE update in context for later publishing
@@ -59,7 +74,9 @@ def process_text_chunk(session_id: str, text_chunk: str, is_final: bool = False)
                         "chunk": text_chunk,
                         "total_transcript": full_transcript,
                         "word_count": word_count,
-                        "is_final": is_final
+                        "is_final": is_final,
+                        "speaker_id": speaker_id,
+                        "speaker_count": len(set(seg["speaker_id"] for seg in speaker_segments))
                     }
                 }
             })
@@ -108,6 +125,50 @@ def analyze_partial_transcript(session_id: str) -> str:
         return f"Error in partial analysis: {str(e)}"
 
 
+def identify_speaker_roles(session_id: str) -> str:
+    """Identify speaker roles based on conversation content"""
+    try:
+        speaker_segments = handoff_context.get_from_context(session_id, "speaker_segments", [])
+        
+        if not speaker_segments:
+            return "No speaker segments available"
+        
+        # Group segments by speaker
+        speaker_texts = {}
+        for seg in speaker_segments:
+            speaker_id = seg["speaker_id"]
+            if speaker_id not in speaker_texts:
+                speaker_texts[speaker_id] = []
+            speaker_texts[speaker_id].append(seg["text"])
+        
+        # Analyze each speaker's text to identify role
+        speaker_roles = {}
+        for speaker_id, texts in speaker_texts.items():
+            combined_text = " ".join(texts).lower()
+            
+            # Simple heuristics for role identification
+            if any(phrase in combined_text for phrase in ["examine", "prescribe", "diagnosis", "let's examine", "continue with", "excellent progress"]):
+                speaker_roles[speaker_id] = "healthcare_provider"
+            elif any(phrase in combined_text for phrase in ["my pain", "i feel", "my symptoms", "i've been", "i'm doing", "i can sleep"]):
+                speaker_roles[speaker_id] = "patient"
+            elif any(phrase in combined_text for phrase in ["vitals", "blood pressure", "temperature is", "here are"]):
+                speaker_roles[speaker_id] = "nurse"
+            else:
+                speaker_roles[speaker_id] = "other"
+        
+        # Update context with speaker roles
+        handoff_context.update_context(session_id, {
+            "speaker_roles": speaker_roles
+        })
+        
+        role_summary = ", ".join([f"{speaker}: {role}" for speaker, role in speaker_roles.items()])
+        return f"Identified speaker roles: {role_summary}"
+        
+    except Exception as e:
+        logger.error(f"Error identifying speaker roles: {str(e)}")
+        return f"Error identifying speaker roles: {str(e)}"
+
+
 def complete_transcription(session_id: str) -> Agent:
     """Complete the transcription and hand off to clinical analysis"""
     try:
@@ -123,11 +184,17 @@ def complete_transcription(session_id: str) -> Agent:
             # Still complete the transcription with empty content
             return clinical_analysis_agent
         
+        # Get speaker information
+        speaker_segments = handoff_context.get_from_context(session_id, "speaker_segments", [])
+        unique_speakers = list(set(seg["speaker_id"] for seg in speaker_segments))
+        
         # Update final status
         handoff_context.update_context(session_id, {
             "transcription_status": "completed",
             "final_word_count": word_count,
-            "streaming_mode": handoff_context.get_from_context(session_id, "streaming_mode", False)
+            "streaming_mode": handoff_context.get_from_context(session_id, "streaming_mode", False),
+            "speaker_count": len(unique_speakers),
+            "speakers": unique_speakers
         })
         
         logger.info(f"Completed transcription for session {session_id}: {word_count} words")
@@ -156,17 +223,19 @@ transcription_agent = Agent(
     instructions="""You are a medical transcription specialist processing real-time text input.
     
 Your responsibilities:
-1. Receive streaming text input from speech recognition
-2. Aggregate text chunks into a complete transcript
+1. Receive streaming text input from speech recognition with speaker attribution
+2. Aggregate text chunks into a complete transcript while tracking speakers
 3. Perform partial analysis to identify emerging sections
-4. Maintain accurate word count and progress tracking
-5. Send real-time updates via SSE
-6. Hand off completed transcripts to clinical analysis
+4. Identify speaker roles (patient, healthcare provider, nurse, etc.)
+5. Maintain accurate word count and progress tracking
+6. Send real-time updates via SSE including speaker information
+7. Hand off completed transcripts to clinical analysis
 
 Available functions:
 - start_text_processing(session_id, initial_text) - Initialize text processing
-- process_text_chunk(session_id, text_chunk, is_final) - Process incoming text
+- process_text_chunk(session_id, text_chunk, is_final, speaker_id) - Process incoming text with speaker
 - analyze_partial_transcript(session_id) - Analyze partial transcript
+- identify_speaker_roles(session_id) - Identify roles of different speakers
 - complete_transcription(session_id) - Complete and hand off to next agent
 
 Always ensure accurate text aggregation and proper handoff to the clinical analysis agent.
@@ -175,6 +244,7 @@ Always ensure accurate text aggregation and proper handoff to the clinical analy
         start_text_processing,
         process_text_chunk,
         analyze_partial_transcript,
+        identify_speaker_roles,
         complete_transcription
     ]
 )

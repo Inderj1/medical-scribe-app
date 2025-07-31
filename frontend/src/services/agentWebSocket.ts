@@ -15,6 +15,9 @@ export interface TranscriptionEvent {
   text: string;
   analysis?: any;
   timestamp: string;
+  speaker_id?: string;
+  speaker_role?: 'healthcare_provider' | 'patient' | 'nurse' | 'other';
+  speaker_count?: number;
 }
 
 export class AgentWebSocketService {
@@ -191,7 +194,10 @@ export class AgentWebSocketService {
           this.onTranscription?.({
             type: 'partial',
             text: data.text,
-            timestamp: data.timestamp
+            timestamp: data.timestamp,
+            speaker_id: data.speaker_id,
+            speaker_role: data.speaker_role,
+            speaker_count: data.speaker_count
           });
           break;
           
@@ -200,7 +206,10 @@ export class AgentWebSocketService {
             type: 'complete',
             text: data.text,
             analysis: data.analysis,
-            timestamp: data.timestamp
+            timestamp: data.timestamp,
+            speaker_id: data.speaker_id,
+            speaker_role: data.speaker_role,
+            speaker_count: data.speaker_count
           });
           break;
           

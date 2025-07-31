@@ -30,6 +30,9 @@ class Transcription(Base):
     progress = Column(Integer, default=0)
     error_message = Column(Text)
     processing_metadata = Column(JSONB)  # whisper settings, processing times
+    speaker_segments = Column(JSONB)  # Array of speaker segments with timestamps
+    speaker_count = Column(Integer, default=1)  # Number of distinct speakers
+    diarization_metadata = Column(JSONB)  # Diarization settings and performance metrics
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     completed_at = Column(DateTime)

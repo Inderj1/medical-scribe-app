@@ -96,7 +96,7 @@ async def transcription_events(
                     "event": event["type"],
                     "data": json.dumps(event["data"]),
                     "id": event.get("timestamp", ""),
-                    "retry": "3000"  # Retry after 3 seconds if connection lost
+                    "retry": 3000  # Retry after 3 seconds if connection lost
                 }
                 
                 # Log significant events
