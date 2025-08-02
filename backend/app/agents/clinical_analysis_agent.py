@@ -48,10 +48,12 @@ def analyze_transcript(session_id: str) -> str:
 def extract_clinical_sections(session_id: str) -> Agent:
     """Extract clinical information from transcript and hand off to structuring"""
     try:
+        logger.info(f"[CLINICAL_ANALYSIS] Starting extract_clinical_sections for session {session_id}")
         transcript = handoff_context.get_from_context(session_id, "transcript", "")
         patient_context = handoff_context.get_from_context(session_id, "patient_context", {})
         speaker_segments = handoff_context.get_from_context(session_id, "speaker_segments", [])
         speaker_roles = handoff_context.get_from_context(session_id, "speaker_roles", {})
+        logger.info(f"[CLINICAL_ANALYSIS] Transcript length: {len(transcript)} chars, segments: {len(speaker_segments)}")
         
         # Handle empty transcript
         if not transcript or not transcript.strip():
@@ -189,9 +191,13 @@ Extract and enhance clinical information according to the sections provided. Inc
             "sections_for_sse": sections_for_sse
         })
         
-        logger.info(f"Prepared {len(sections_for_sse)} sections for SSE publishing: {list(sections_for_sse.keys())}")
+        logger.info(f"[CLINICAL_ANALYSIS] Prepared {len(sections_for_sse)} sections for SSE publishing: {list(sections_for_sse.keys())}")
         
-        logger.info(f"Completed clinical analysis for session {session_id}")
+        # Log the actual content of sections for debugging
+        for section, data in sections_for_sse.items():
+            logger.info(f"[CLINICAL_ANALYSIS] Section {section}: {data['content'][:100]}...")
+        
+        logger.info(f"[CLINICAL_ANALYSIS] Completed clinical analysis for session {session_id}")
         
         # Hand off to note structuring
         return note_structuring_agent

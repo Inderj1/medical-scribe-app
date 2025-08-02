@@ -139,13 +139,19 @@ function ClinicalNotesPage() {
       });
 
       if (response.ok) {
-        console.log('Session ended successfully, agents will now process the transcript');
+        const data = await response.json();
+        console.log('Session end response:', data);
         sessionEndedRef.current = true;
-      } else if (response.status === 409) {
-        console.log('Session already ended or being processed');
-        sessionEndedRef.current = true;
+        
+        if (data.status === 'ended') {
+          console.log('Session ended successfully, agents will now process the transcript');
+        } else if (data.status === 'already_processing') {
+          console.log('Session already being processed');
+        } else if (data.status === 'already_completed') {
+          console.log('Session already completed');
+        }
       } else {
-        console.error('Failed to end session:', response.statusText);
+        console.error('Failed to end session:', response.status, response.statusText);
       }
     } catch (error) {
       console.error('Failed to end streaming session:', error);
@@ -192,7 +198,24 @@ function ClinicalNotesPage() {
         timestamp: new Date().toISOString()
       });
       
-      // Only send if we have an active session and it's not ended
+      // Update live transcript with everything (interim and final)
+      if (text && isFinal) {
+        setLiveTranscript(prev => {
+          // For final results, append to transcript
+          // Add space only if there's existing content
+          const separator = prev && prev.trim() ? ' ' : '';
+          const newTranscript = (prev || '').trim() + separator + text;
+          console.log('[LIVE_TRANSCRIPT] Adding final text:', {
+            previous: prev || '',
+            adding: text,
+            result: newTranscript,
+            wordCount: newTranscript.split(' ').filter(w => w.length > 0).length
+          });
+          return newTranscript;
+        });
+      }
+      
+      // Only send final results to backend
       if (currentTranscriptionId && isFinal && !sessionEndedRef.current) {
         // Send text chunk to backend
         try {
@@ -299,9 +322,35 @@ function ClinicalNotesPage() {
   const [isLoadingEHR, setIsLoadingEHR] = useState(false);
   const [activeAgents, setActiveAgents] = useState<any[]>([]);
   const [currentSection, setCurrentSection] = useState<string | null>(null);
-  const [sections, setSections] = useState<any>({});
+  const [sections, setSections] = useState<any>({
+    chief_complaint: '',
+    history_present_illness: '',
+    past_medical_history: '', 
+    medications: '',
+    allergies: '',
+    family_history: '',
+    social_history: '',
+    review_of_systems: '',
+    physical_examination: '',
+    assessment: '',
+    plan: '',
+    additional_notes: ''
+  });
   const [showSummaryReview, setShowSummaryReview] = useState(false);
   const [transcriptionProgress, setTranscriptionProgress] = useState(0);
+  const [liveTranscript, setLiveTranscript] = useState<string>('');
+
+  // Log sections changes
+  useEffect(() => {
+    console.log('[SECTIONS] Sections state changed:', {
+      keys: Object.keys(sections),
+      hasContent: Object.keys(sections).filter(k => sections[k]).length,
+      chief_complaint: sections.chief_complaint ? 'YES' : 'NO',
+      medications: sections.medications ? 'YES' : 'NO',
+      allergies: sections.allergies ? 'YES' : 'NO',
+      timestamp: new Date().toISOString()
+    });
+  }, [sections]);
 
   // Define this function early so it can be used throughout the component
   const processClinicalNotesPrefill = (data: any) => {
@@ -331,8 +380,12 @@ function ClinicalNotesPage() {
         return acc;
       }, {} as Record<string, string>);
       
-      setSections(sanitizedSections);
-      console.log('Setting sections state with:', sanitizedSections);
+      // Merge with existing sections to preserve SSE updates
+      setSections((prevSections: any) => ({
+        ...prevSections,
+        ...sanitizedSections
+      }));
+      console.log('Merging sections state with:', sanitizedSections);
       
       // Handle vitals separately if they exist
       if (prefillSections.vital_signs && typeof prefillSections.vital_signs === 'object') {
@@ -345,6 +398,80 @@ function ClinicalNotesPage() {
       console.log('Sections state will be updated with keys:', Object.keys(sanitizedSections));
     }
   };
+
+  // Periodic section polling when recording
+  useEffect(() => {
+    if (!currentTranscriptionId || !isListening) return;
+    
+    console.log('[POLLING] Setting up section polling for session:', currentTranscriptionId);
+    
+    const pollSections = async () => {
+      try {
+        const token = await (window as any).Clerk?.session?.getToken();
+        if (!token) {
+          console.log('[POLLING] No auth token available');
+          return;
+        }
+        
+        console.log('[POLLING] Fetching sections...');
+        const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${currentTranscriptionId}/sections`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          const currentSectionCount = Object.keys(sections).filter(k => sections[k]).length;
+          const fetchedSectionCount = Object.keys(data.sections || {}).length;
+          
+          console.log('[POLLING] Section check:', {
+            current: currentSectionCount,
+            fetched: fetchedSectionCount,
+            status: data.transcription_status,
+            sections: Object.keys(data.sections || {})
+          });
+          
+          // Check for new or updated sections
+          let hasUpdates = false;
+          const updates: Record<string, any> = {};
+          
+          Object.entries(data.sections || {}).forEach(([section, sectionData]: [string, any]) => {
+            const mappedSection = SECTION_NAME_MAP[section] || 'additional_notes';
+            const newContent = sectionData.content || '';
+            const currentContent = sections[mappedSection] || '';
+            
+            // Check if this is new content or updated content
+            if (newContent && newContent !== currentContent) {
+              hasUpdates = true;
+              updates[mappedSection] = newContent;
+              console.log('[POLLING] Section update detected:', {
+                section: mappedSection,
+                backend_section: section,
+                contentLength: newContent.length,
+                isNew: !currentContent
+              });
+            }
+          });
+          
+          if (hasUpdates) {
+            console.log('[POLLING] Applying section updates:', Object.keys(updates));
+            setSections((prev: any) => ({
+              ...prev,
+              ...updates
+            }));
+          }
+        }
+      } catch (error) {
+        console.error('[POLLING] Error polling sections:', error);
+      }
+    };
+    
+    // Poll every 3 seconds
+    const interval = setInterval(pollSections, 3000);
+    
+    return () => clearInterval(interval);
+  }, [currentTranscriptionId, isListening, sections]);
 
   useEffect(() => {
     // Handle SSE events
@@ -375,14 +502,19 @@ function ClinicalNotesPage() {
             chunk: lastEvent.data,
             timestamp: new Date().toISOString()
           });
+          // Don't update live transcript here - it's already updated from speech recognition
           break;
           
         case 'section_completed':
           // Handle section completion from agents
           const { section, content, confidence } = lastEvent.data;
+          // Ensure content is a string
+          const contentStr = typeof content === 'string' ? content : 
+                            typeof content === 'object' ? JSON.stringify(content) : 
+                            String(content || '');
           console.log('[SSE] Section completed:', {
             section,
-            content: content ? content.substring(0, 100) + '...' : 'empty',
+            content: contentStr ? contentStr.substring(0, 100) + '...' : 'empty',
             confidence,
             timestamp: new Date().toISOString()
           });
@@ -402,7 +534,7 @@ function ClinicalNotesPage() {
               // For unmapped sections, append to additional notes with formatting
               const existingNotes = prev.additional_notes || '';
               const timestamp = new Date().toLocaleTimeString();
-              const formattedContent = `[${timestamp}] ${section.replace(/_/g, ' ').toUpperCase()}:\n${content}\n\n`;
+              const formattedContent = `[${timestamp}] ${section.replace(/_/g, ' ').toUpperCase()}:\n${contentStr}\n\n`;
               updated = {
                 ...prev,
                 additional_notes: existingNotes + formattedContent
@@ -411,7 +543,7 @@ function ClinicalNotesPage() {
               // For mapped sections, replace content
               updated = {
                 ...prev,
-                [mappedSection]: content
+                [mappedSection]: contentStr
               };
             }
             
@@ -419,10 +551,17 @@ function ClinicalNotesPage() {
               previousKeys: Object.keys(prev),
               newKeys: Object.keys(updated),
               updatedSection: mappedSection,
-              isAdditionalNotes: mappedSection === 'additional_notes'
+              isAdditionalNotes: mappedSection === 'additional_notes',
+              actualContent: updated[mappedSection]?.substring(0, 50) + '...',
+              fullUpdatedObject: updated
             });
             return updated;
           });
+          
+          // Debug: Log current sections after update
+          setTimeout(() => {
+            console.log('[SSE] Current sections after update:', sections);
+          }, 100);
           
           setActiveAgents((prev) => {
             const existing = prev.find(a => a.section === section);
@@ -551,6 +690,9 @@ function ClinicalNotesPage() {
       console.error('No patient selected');
       return;
     }
+    
+    // Reset live transcript for new session
+    setLiveTranscript('');
     
     // Prevent duplicate session creation
     if (currentTranscriptionId || isStartingSession.current) {
@@ -768,6 +910,68 @@ function ClinicalNotesPage() {
       // Wait a bit for SSE connection to establish
       await new Promise(resolve => setTimeout(resolve, 1000));
       console.log('[SESSION] Waited for SSE connection');
+      
+      // Fetch any sections that may have already been processed
+      try {
+        console.log('[SESSION] Fetching existing sections for session:', data.session_id);
+        const sectionsResponse = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/api/v1/streaming/${data.session_id}/sections`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+        
+        if (sectionsResponse.ok) {
+          const sectionsData = await sectionsResponse.json();
+          console.log('[SESSION] Fetched sections:', {
+            count: Object.keys(sectionsData.sections || {}).length,
+            sections: Object.keys(sectionsData.sections || {}),
+            status: sectionsData.transcription_status
+          });
+          
+          // Process each section
+          if (sectionsData.sections) {
+            Object.entries(sectionsData.sections).forEach(([section, data]: [string, any]) => {
+              console.log('[SESSION] Processing fetched section:', section);
+              
+              // Map backend section name to frontend section name
+              const mappedSection = SECTION_NAME_MAP[section] || 'additional_notes';
+              
+              setSections((prev: any) => {
+                let updated;
+                
+                if (mappedSection === 'additional_notes') {
+                  // For unmapped sections, append to additional notes
+                  const existingNotes = prev.additional_notes || '';
+                  const timestamp = new Date().toLocaleTimeString();
+                  const formattedContent = `[${timestamp}] ${section.replace(/_/g, ' ').toUpperCase()} (fetched):\n${data.content}\n\n`;
+                  updated = {
+                    ...prev,
+                    additional_notes: existingNotes + formattedContent
+                  };
+                } else {
+                  // For mapped sections, replace content
+                  updated = {
+                    ...prev,
+                    [mappedSection]: data.content
+                  };
+                }
+                
+                console.log('[SESSION] Updated sections after fetch:', {
+                  section: mappedSection,
+                  hasContent: !!data.content,
+                  confidence: data.confidence
+                });
+                
+                return updated;
+              });
+            });
+          }
+        } else {
+          console.warn('[SESSION] Failed to fetch sections:', sectionsResponse.statusText);
+        }
+      } catch (error) {
+        console.error('[SESSION] Error fetching sections:', error);
+      }
       
       // Check connection status
       console.log('[SESSION] SSE connection status after wait:', connectionStatus);
@@ -1017,39 +1221,38 @@ function ClinicalNotesPage() {
                 </Box>
                 
                 {/* Live transcript display */}
-                {(speechTranscript || interimTranscript) && (
-                  <Box sx={{ 
-                    px: 2,
-                    flex: 1,
-                    overflowY: 'auto'
+                <Box sx={{ 
+                  px: 2,
+                  flex: 1,
+                  overflowY: 'auto',
+                  display: (liveTranscript || interimTranscript) ? 'block' : 'none'
+                }}>
+                  <Typography variant="body2" sx={{ 
+                    color: 'rgba(255,255,255,0.9)',
+                    lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap'
                   }}>
-                    <Typography variant="body2" sx={{ 
-                      color: 'rgba(255,255,255,0.9)',
-                      lineHeight: 1.6
-                    }}>
-                      {speechTranscript}
-                    </Typography>
+                    {liveTranscript}
                     {interimTranscript && (
-                      <Typography variant="body2" sx={{ 
+                      <span style={{ 
                         color: 'rgba(255,255,255,0.6)',
-                        fontStyle: 'italic',
-                        display: 'inline'
+                        fontStyle: 'italic'
                       }}>
-                        {' ' + interimTranscript}
-                      </Typography>
+                        {liveTranscript ? ' ' + interimTranscript : interimTranscript}
+                      </span>
                     )}
-                  </Box>
-                )}
+                  </Typography>
+                </Box>
                 
                 {/* Word count */}
-                {speechTranscript && (
+                {liveTranscript && (
                   <Box sx={{ 
                     px: 2, 
                     py: 1, 
                     borderTop: '1px solid rgba(255,255,255,0.2)' 
                   }}>
                     <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                      {speechTranscript.split(' ').filter(w => w.length > 0).length} words
+                      {liveTranscript.split(' ').filter(w => w.length > 0).length} words
                     </Typography>
                   </Box>
                 )}
@@ -1086,10 +1289,22 @@ function ClinicalNotesPage() {
 
               <Box sx={{ p: 2, flex: 1, overflow: 'auto' }}>
                 {/* Debug: Show available sections */}
-                {process.env.NODE_ENV === 'development' && (
+                {true && (
                   <Box sx={{ mb: 2, p: 1, bgcolor: 'grey.100', borderRadius: 1 }}>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography variant="caption" color="primary">
                       Debug - Available sections: {Object.keys(sections).filter(k => sections[k]).join(', ') || 'none'}
+                    </Typography>
+                    <Typography variant="caption" color="primary" display="block">
+                      Debug - Section count: {Object.keys(sections).filter(k => sections[k]).length}
+                    </Typography>
+                    <Typography variant="caption" color="info.main" display="block">
+                      Debug - Chief complaint: {sections.chief_complaint ? 'YES' : 'NO'} | Medications: {sections.medications ? 'YES' : 'NO'} | Allergies: {sections.allergies ? 'YES' : 'NO'}
+                    </Typography>
+                    <Typography variant="caption" color="warning.main" display="block">
+                      Debug - Render time: {new Date().toLocaleTimeString()}
+                    </Typography>
+                    <Typography variant="caption" color="success.main" display="block">
+                      Debug - SSE Status: {connectionStatus} | Last Event: {lastEvent?.type || 'none'}
                     </Typography>
                   </Box>
                 )}

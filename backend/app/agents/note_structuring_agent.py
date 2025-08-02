@@ -202,12 +202,15 @@ def add_medical_codes(session_id: str) -> str:
     # Simple mapping - in production, use proper medical coding API
     icd_codes = []
     
-    assessment = clinical_data.get("assessment", "").lower()
-    if "hypertension" in assessment:
+    assessment = clinical_data.get("assessment") or ""
+    assessment_lower = assessment.lower()
+    if "hypertension" in assessment_lower:
         icd_codes.append("I10 - Essential (primary) hypertension")
-    if "diabetes" in assessment:
+    if "diabetes" in assessment_lower:
         icd_codes.append("E11.9 - Type 2 diabetes mellitus without complications")
-    if "chest pain" in clinical_data.get("chief_complaint", "").lower():
+    
+    chief_complaint = clinical_data.get("chief_complaint") or ""
+    if "chest pain" in chief_complaint.lower():
         icd_codes.append("R07.9 - Chest pain, unspecified")
     
     handoff_context.update_context(session_id, {

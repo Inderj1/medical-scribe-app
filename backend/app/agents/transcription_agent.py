@@ -186,7 +186,7 @@ def complete_transcription(session_id: str) -> Agent:
         
         # Get speaker information
         speaker_segments = handoff_context.get_from_context(session_id, "speaker_segments", [])
-        unique_speakers = list(set(seg["speaker_id"] for seg in speaker_segments))
+        unique_speakers = set(seg["speaker_id"] for seg in speaker_segments)
         
         # Update final status
         handoff_context.update_context(session_id, {

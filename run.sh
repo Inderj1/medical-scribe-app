@@ -127,6 +127,7 @@ stop_existing_services() {
     # Kill processes on specific ports
     kill_port $BACKEND_PORT
     kill_port $FRONTEND_PORT
+    kill_port 3100  # Also kill hardcoded port 3100 in case it's stuck
     kill_port $POSTGRES_PORT
     kill_port $REDIS_PORT
     
@@ -525,7 +526,10 @@ main() {
         --frontend-only)
             print_banner
             mkdir -p logs
+            print_status "Freeing up frontend port..."
             kill_port $FRONTEND_PORT
+            kill_port 3100  # Also kill hardcoded port 3100
+            sleep 2  # Give time for port to be released
             setup_node_env
             start_frontend
             show_status

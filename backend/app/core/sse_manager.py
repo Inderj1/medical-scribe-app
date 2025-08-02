@@ -61,6 +61,12 @@ class SSEManager:
                 
         logger.info(f"Published {event['type']} to {channel} ({len(subscribers)} subscribers)")
     
+    def get_subscriber_count(self, channel: str) -> int:
+        """Get the number of subscribers for a channel"""
+        if channel in self._subscribers:
+            return len(self._subscribers[channel])
+        return 0
+    
     async def close_channel(self, channel: str):
         """Close a channel and notify all subscribers"""
         await self.publish(channel, {

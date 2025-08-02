@@ -315,6 +315,12 @@ async def stream_text_chunk(
         context["speakers"] = set()
     context["speakers"].add(speaker_id)
     
+    # Initialize or update last analysis timestamp
+    if "last_analysis_time" not in context:
+        context["last_analysis_time"] = datetime.utcnow()
+    if "last_analysis_word_count" not in context:
+        context["last_analysis_word_count"] = 0
+    
     # Append to transcript chunks
     context["transcript_chunks"].append({
         "text": text_chunk,
@@ -355,8 +361,28 @@ async def stream_text_chunk(
     # If we have enough text, trigger agent processing
     word_count = len(full_transcript.split())
     logger.info(f"[STREAMING] Current transcript word count: {word_count} words")
-    if word_count >= 50 and word_count % 50 == 0:  # Process every 50 words
-        logger.info(f"[STREAMING] Triggering incremental analysis at {word_count} words")
+    
+    # Check if we should trigger analysis based on words or time
+    time_since_last_analysis = (datetime.utcnow() - context["last_analysis_time"]).total_seconds()
+    words_since_last_analysis = word_count - context["last_analysis_word_count"]
+    
+    # Trigger analysis if:
+    # 1. We have at least 5 new words, OR
+    # 2. It's been 5 seconds since last analysis AND we have at least 3 new words
+    should_analyze = (
+        (words_since_last_analysis >= 5) or 
+        (time_since_last_analysis >= 5 and words_since_last_analysis >= 3)
+    )
+    
+    if should_analyze and word_count >= 3:  # Minimum 3 words total
+        logger.info(f"[STREAMING] Triggering incremental analysis: {word_count} words, "
+                   f"{words_since_last_analysis} new words, {time_since_last_analysis:.1f}s since last analysis")
+        
+        # Update tracking
+        context["last_analysis_time"] = datetime.utcnow()
+        context["last_analysis_word_count"] = word_count
+        handoff_context.update_context(session_id, context)
+        
         # Trigger agent analysis in background
         await _trigger_incremental_analysis(session_id, full_transcript)
     
@@ -366,6 +392,69 @@ async def stream_text_chunk(
         "total_length": len(full_transcript),
         "speaker_id": speaker_id,
         "speaker_count": context["speaker_count"]
+    }
+
+
+@router.get("/{session_id}/sections")
+async def get_session_sections(
+    session_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all completed sections for a streaming session"""
+    
+    # Verify session exists
+    try:
+        transcription_uuid = uuid.UUID(session_id)
+        transcription = db.query(Transcription).filter(
+            Transcription.id == transcription_uuid
+        ).first()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
+    
+    if not transcription:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Verify access
+    if transcription.encounter_id and transcription.encounter.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Get sections from context
+    context = handoff_context.get_context(session_id)
+    if not context:
+        logger.warning(f"No context found for session {session_id}, returning empty sections")
+        return {"sections": {}}
+    
+    # Get the sections that have been processed
+    sections_for_sse = context.get("sections_for_sse", {})
+    clinical_data = context.get("clinical_data", {})
+    
+    # Combine both sources of section data
+    all_sections = {}
+    
+    # Add sections from SSE (these are the formatted sections ready for display)
+    for section, section_data in sections_for_sse.items():
+        all_sections[section] = {
+            "content": section_data.get("content", ""),
+            "confidence": section_data.get("confidence", 0.0),
+            "source": "agent_processing"
+        }
+    
+    # Add any clinical data sections that might not be in sections_for_sse
+    for section, content in clinical_data.items():
+        if section not in all_sections and content:
+            all_sections[section] = {
+                "content": content,
+                "confidence": 1.0,
+                "source": "clinical_analysis"
+            }
+    
+    logger.info(f"[SECTIONS] Returning {len(all_sections)} sections for session {session_id}: {list(all_sections.keys())}")
+    
+    return {
+        "sections": all_sections,
+        "transcription_status": transcription.status,
+        "last_updated": context.get("last_update_time", datetime.utcnow()).isoformat()
     }
 
 
@@ -395,15 +484,19 @@ async def end_streaming_session(
     
     # Check if session is already in final state
     if transcription.status == "processing":
-        raise HTTPException(
-            status_code=409, 
-            detail="Session is already being processed."
-        )
+        logger.info(f"[STREAMING] Session {session_id} already processing, returning success")
+        return {
+            "status": "already_processing",
+            "transcription_id": session_id,
+            "message": "Session is already being processed"
+        }
     elif transcription.status == "completed":
-        raise HTTPException(
-            status_code=409, 
-            detail="Session is already completed."
-        )
+        logger.info(f"[STREAMING] Session {session_id} already completed, returning success")
+        return {
+            "status": "already_completed", 
+            "transcription_id": session_id,
+            "message": "Session is already completed"
+        }
     
     # Get final transcript
     context = handoff_context.get_context(session_id)
@@ -449,6 +542,8 @@ async def _trigger_incremental_analysis(session_id: str, transcript: str):
     """Trigger incremental analysis by agents"""
     
     try:
+        logger.info(f"[INCREMENTAL] Starting incremental analysis for session {session_id}, transcript length: {len(transcript)} chars")
+        
         # Update context to trigger partial analysis
         handoff_context.update_context(session_id, {
             "partial_analysis_requested": True,
@@ -465,8 +560,36 @@ async def _trigger_incremental_analysis(session_id: str, transcript: str):
             }
         })
         
+        # Run the medical scribe supervisor for incremental analysis
+        logger.info(f"[INCREMENTAL] Running agent processing for session {session_id}")
+        result = await medical_scribe_supervisor.process_streaming_transcript(
+            session_id=session_id
+        )
+        logger.info(f"[INCREMENTAL] Agent processing result: {result}")
+        
+        # Get the sections from context and publish them
+        context = handoff_context.get_context(session_id)
+        sections_for_sse = context.get("sections_for_sse", {}) if context else {}
+        logger.info(f"[INCREMENTAL] Found {len(sections_for_sse)} sections to publish: {list(sections_for_sse.keys())}")
+        
+        # Publish individual section completion events
+        for section, section_data in sections_for_sse.items():
+            # Get current subscriber count for debugging
+            subscriber_count = sse_manager.get_subscriber_count(channel)
+            logger.info(f"[INCREMENTAL] Publishing section_completed for '{section}' to {subscriber_count} subscribers")
+            
+            await sse_manager.publish(channel, {
+                "type": "section_completed",
+                "data": {
+                    "section": section,
+                    "content": section_data["content"],
+                    "confidence": section_data["confidence"]
+                }
+            })
+            logger.info(f"[INCREMENTAL] Published section_completed event for: {section} (content length: {len(section_data['content'])})")
+        
     except Exception as e:
-        logger.error(f"Error triggering incremental analysis: {e}")
+        logger.error(f"[INCREMENTAL] Error triggering incremental analysis: {e}", exc_info=True)
 
 
 async def _trigger_final_processing(session_id: str, transcription: Transcription, db: Session):

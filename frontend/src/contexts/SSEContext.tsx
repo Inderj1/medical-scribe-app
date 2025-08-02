@@ -114,13 +114,18 @@ export const SSEProvider: React.FC<SSEProviderProps> = ({ children }) => {
       });
 
       eventSource.addEventListener('section_completed', (event) => {
-        const data = JSON.parse(event.data);
-        console.log('[SSE] Section completed event:', {
-          section: data.section,
-          contentLength: data.content?.length,
-          confidence: data.confidence
-        });
-        setLastEvent({ type: 'section_completed', data });
+        console.log('[SSE] Raw section_completed event:', event);
+        try {
+          const data = JSON.parse(event.data);
+          console.log('[SSE] Section completed event:', {
+            section: data.section,
+            contentLength: data.content?.length,
+            confidence: data.confidence
+          });
+          setLastEvent({ type: 'section_completed', data });
+        } catch (e) {
+          console.error('[SSE] Error parsing section_completed event:', e, event.data);
+        }
       });
       
       // Add a generic message handler to catch any events
