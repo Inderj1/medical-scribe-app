@@ -1,6 +1,6 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
-import { useAuth } from '@clerk/clerk-react';
+import { useAuth } from '../../hooks/useAuthWrapper';
 import { Box, CircularProgress } from '@mui/material';
 
 interface ProtectedRouteProps {

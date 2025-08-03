@@ -22,7 +22,7 @@ import StopIcon from '@mui/icons-material/Stop';
 import NotesIcon from '@mui/icons-material/Notes';
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
 import ArticleIcon from '@mui/icons-material/Article';
-import { useUser, useAuth } from '@clerk/clerk-react';
+import { useUser, useAuth } from '../../hooks/useAuthWrapper';
 import { agentWebSocketService, TranscriptionEvent } from '../../services/agentWebSocket';
 
 interface RealtimeTranscriptionProps {

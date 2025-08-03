@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -100,14 +100,7 @@ function TabPanel(props: TabPanelProps) {
 let renderCount = 0;
 
 function PatientRecordsPage() {
-  renderCount++;
-  console.log(`PatientRecordsPage component rendering... (render #${renderCount})`);
-  
-  if (renderCount > 50) {
-    console.error('INFINITE RENDER LOOP DETECTED! Stopping after 50 renders');
-    return <div>Error: Infinite render loop detected</div>;
-  }
-  
+  // All hooks must be called before any conditional returns
   const navigate = useNavigate();
   const { setSelectedPatient: setContextPatient, setSelectedEncounter: setContextEncounter, setRecentVitals } = usePatient();
   
@@ -122,27 +115,8 @@ function PatientRecordsPage() {
   const [selectedEncounter, setSelectedEncounter] = useState<Encounter | null>(null);
   const initialLoadRef = useRef(false);
   
-  renderCount++;
-  console.log(`PatientRecordsPage component rendering... (render #${renderCount})`);
-  
-  if (renderCount > 50) {
-    console.error('INFINITE RENDER LOOP DETECTED! Stopping after 50 renders');
-    return <div>Error: Infinite render loop detected</div>;
-  }
-
-  useEffect(() => {
-    // Prevent duplicate calls in React StrictMode or on hot reload
-    console.log('PatientRecordsPage useEffect triggered, initialLoadRef.current:', initialLoadRef.current);
-    if (!initialLoadRef.current) {
-      initialLoadRef.current = true;
-      console.log('Starting initial patient search...');
-      searchPatients();
-    } else {
-      console.log('Skipping duplicate patient search call');
-    }
-  }, []);
-
-  const searchPatients = async (searchQuery?: string) => {
+  // Define searchPatients function before useEffect
+  const searchPatients = useCallback(async (searchQuery?: string) => {
     console.log(`searchPatients called with searchQuery: "${searchQuery}", loading: ${loading}`);
     
     // Prevent multiple simultaneous calls
@@ -183,7 +157,27 @@ function PatientRecordsPage() {
     }
     
     console.log('searchPatients function completed');
-  };
+  }, [loading]);
+
+  useEffect(() => {
+    // Prevent duplicate calls in React StrictMode or on hot reload
+    console.log('PatientRecordsPage useEffect triggered, initialLoadRef.current:', initialLoadRef.current);
+    if (!initialLoadRef.current) {
+      initialLoadRef.current = true;
+      console.log('Starting initial patient search...');
+      searchPatients();
+    } else {
+      console.log('Skipping duplicate patient search call');
+    }
+  }, [searchPatients]);
+  
+  renderCount++;
+  console.log(`PatientRecordsPage component rendering... (render #${renderCount})`);
+  
+  if (renderCount > 50) {
+    console.error('INFINITE RENDER LOOP DETECTED! Stopping after 50 renders');
+    return <div>Error: Infinite render loop detected</div>;
+  }
 
   const handleSearch = (event: React.FormEvent) => {
     event.preventDefault();

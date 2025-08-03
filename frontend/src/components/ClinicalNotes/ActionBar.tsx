@@ -16,7 +16,7 @@ import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
 import { formatDistanceToNow } from 'date-fns';
-import { useAuth } from '@clerk/clerk-react';
+import { useAuth } from '../../hooks/useAuthWrapper';
 import webSocketService from '../../services/websocket';
 import authService from '../../services/auth';
 

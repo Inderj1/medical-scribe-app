@@ -70,8 +70,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         if not test_user:
             test_user = User(
                 email="test@example.com",
-                first_name="Test",
-                last_name="User", 
+                full_name="Test User",
+                hashed_password="$2b$12$test", # dummy hash for test user
                 is_active=True
             )
             db.add(test_user)

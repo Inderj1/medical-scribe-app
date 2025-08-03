@@ -19,13 +19,17 @@ import {
   AccordionSummary,
   AccordionDetails,
   Checkbox,
-  FormControlLabel
+  FormControlLabel,
+  Switch,
+  Tooltip
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import PatientHeader from '../components/ClinicalNotes/PatientHeader';
 import ClinicalDocumentationClean from '../components/ClinicalNotes/ClinicalDocumentationClean';
 import RealtimeTranscription from '../components/ClinicalNotes/RealtimeTranscription';
+import AudioStreamingTranscription from '../components/ClinicalNotes/AudioStreamingTranscription';
 import ActionBar from '../components/ClinicalNotes/ActionBar';
+import AudioUploader from '../components/ClinicalNotes/AudioUploader';
 import { useSSE } from '../contexts/SSEContext';
 import { ehrbaseAPI } from '../services/ehrbase-api';
 import { useWebSpeech } from '../hooks/useWebSpeech';
@@ -40,6 +44,7 @@ import PrintIcon from '@mui/icons-material/Print';
 import AddIcon from '@mui/icons-material/Add';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import HearingIcon from '@mui/icons-material/Hearing';
 
 interface PatientData {
   id: string;
@@ -322,6 +327,7 @@ function ClinicalNotesPage() {
   const [isLoadingEHR, setIsLoadingEHR] = useState(false);
   const [activeAgents, setActiveAgents] = useState<any[]>([]);
   const [currentSection, setCurrentSection] = useState<string | null>(null);
+  const [useAudioStreaming, setUseAudioStreaming] = useState(false); // Feature flag for audio streaming
   const [sections, setSections] = useState<any>({
     chief_complaint: '',
     history_present_illness: '',
@@ -878,6 +884,7 @@ function ClinicalNotesPage() {
           enable_speaker_diarization: true, // Enable multi-speaker support
           ehr_sections: ehrData || {}, // Send the actual EHR data that was fetched, not current UI sections
           // Include patient info for temporary encounters
+          patient_id: patient.id,  // Send the actual patient ID from the database
           patient_ehr_id: patient.ehr_id,
           patient_mrn: patient.mrn,
           patient_first_name: patient.first_name,
@@ -1144,81 +1151,185 @@ function ClinicalNotesPage() {
                 gap: 2,
                 overflowY: 'auto'
               }}>
-                {/* Transcription controls */}
-                <Box sx={{ textAlign: 'center' }}>
-                  <Box sx={{
-                    width: 80,
-                    height: 80,
-                    borderRadius: '50%',
-                    border: '3px solid rgba(255,255,255,0.3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    margin: '0 auto',
-                    mb: 2,
-                    cursor: 'pointer',
-                    transition: 'all 0.3s ease',
-                    bgcolor: isListening ? 'rgba(255,255,255,0.2)' : 'transparent',
-                    '&:hover': {
-                      bgcolor: 'rgba(255,255,255,0.1)',
-                      transform: 'scale(1.05)'
+                {/* Audio Streaming Toggle */}
+                <Box sx={{ 
+                  px: 2, 
+                  pb: 2, 
+                  borderBottom: '1px solid rgba(255,255,255,0.2)' 
+                }}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={useAudioStreaming}
+                        onChange={(e) => setUseAudioStreaming(e.target.checked)}
+                        sx={{
+                          '& .MuiSwitch-switchBase.Mui-checked': {
+                            color: 'white',
+                          },
+                          '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                            backgroundColor: 'rgba(255,255,255,0.5)',
+                          },
+                        }}
+                      />
                     }
-                  }}
-                  onClick={async () => {
-                    if (isListening) {
-                      stopListening();
-                      if (currentTranscriptionId) {
-                        handleEndSession();
-                      }
-                    } else {
-                      // Start a new session when microphone is clicked
-                      if (!currentTranscriptionId || sessionEndedRef.current) {
-                        await handleStartClinicalNotes();
-                      }
-                      startListening();
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <HearingIcon fontSize="small" />
+                        <Typography variant="body2">
+                          Use Audio Streaming (Speaker Detection)
+                        </Typography>
+                      </Box>
                     }
-                  }}
-                  >
-                    <MicIcon sx={{ 
-                      fontSize: 40, 
-                      opacity: isListening ? 1 : 0.7,
-                      animation: isListening ? 'pulse 2s infinite' : 'none'
-                    }} />
-                  </Box>
-                  
-                  <Typography variant="h6" sx={{ opacity: 0.9, mb: 1 }}>
-                    {isListening ? 'Listening...' : 'Ready to Transcribe'}
+                    sx={{ 
+                      color: 'white',
+                      '& .MuiFormControlLabel-label': {
+                        fontSize: '0.875rem'
+                      }
+                    }}
+                  />
+                  <Typography variant="caption" sx={{ display: 'block', mt: 1, opacity: 0.8 }}>
+                    {useAudioStreaming 
+                      ? 'Audio will be sent to OpenAI Whisper for transcription with speaker identification'
+                      : 'Using browser-based speech recognition (no speaker detection)'}
                   </Typography>
-                  
-                  {/* Add visible Stop button when recording */}
-                  {isListening && (
-                    <Button
-                      variant="contained"
-                      color="error"
-                      size="medium"
-                      onClick={() => {
-                        console.log('[UI] Stop button clicked');
+                </Box>
+                
+                {/* Conditional rendering based on feature flag */}
+                {useAudioStreaming ? (
+                  // Audio Streaming Component
+                  <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    {!currentTranscriptionId ? (
+                      // Show start button when no session
+                      <Box sx={{ textAlign: 'center', p: 2 }}>
+                        <Typography variant="body2" sx={{ mb: 2, opacity: 0.9 }}>
+                          Click to start recording with speaker detection
+                        </Typography>
+                        <Button
+                          variant="contained"
+                          size="large"
+                          startIcon={<MicIcon />}
+                          onClick={handleStartClinicalNotes}
+                          sx={{
+                            bgcolor: 'rgba(255,255,255,0.2)',
+                            color: 'white',
+                            '&:hover': { bgcolor: 'rgba(255,255,255,0.3)' }
+                          }}
+                        >
+                          Start Recording
+                        </Button>
+                      </Box>
+                    ) : (
+                      // Show audio streaming component when session is active
+                      <AudioStreamingTranscription
+                        sessionId={`session_${currentTranscriptionId}`}
+                        encounterId={encounter?.id || ''}
+                        patientId={patient?.id || ''}
+                        onTranscriptionUpdate={(text, speaker) => {
+                          console.log('Audio streaming transcription update:', { text, speaker });
+                          // Update live transcript
+                          setLiveTranscript(prev => prev + (prev ? ' ' : '') + text);
+                        }}
+                        onError={(error) => {
+                          console.error('Audio streaming error:', error);
+                        }}
+                      />
+                    )}
+                  </Box>
+                ) : (
+                  // Original Web Speech API controls
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Box sx={{
+                      width: 80,
+                      height: 80,
+                      borderRadius: '50%',
+                      border: '3px solid rgba(255,255,255,0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '0 auto',
+                      mb: 2,
+                      cursor: 'pointer',
+                      transition: 'all 0.3s ease',
+                      bgcolor: isListening ? 'rgba(255,255,255,0.2)' : 'transparent',
+                      '&:hover': {
+                        bgcolor: 'rgba(255,255,255,0.1)',
+                        transform: 'scale(1.05)'
+                      }
+                    }}
+                    onClick={async () => {
+                      if (isListening) {
                         stopListening();
                         if (currentTranscriptionId) {
                           handleEndSession();
                         }
-                      }}
-                      sx={{ 
-                        mb: 2,
-                        minWidth: 120,
-                        fontWeight: 'bold'
-                      }}
+                      } else {
+                        // Start a new session when microphone is clicked
+                        if (!currentTranscriptionId || sessionEndedRef.current) {
+                          await handleStartClinicalNotes();
+                        }
+                        startListening();
+                      }
+                    }}
                     >
-                      Stop Recording
-                    </Button>
-                  )}
-                  
-                  {!isSupported && (
-                    <Alert severity="warning" sx={{ mx: 2 }}>
-                      Speech recognition not supported. Please use Chrome or Edge.
-                    </Alert>
-                  )}
-                </Box>
+                      <MicIcon sx={{ 
+                        fontSize: 40, 
+                        opacity: isListening ? 1 : 0.7,
+                        animation: isListening ? 'pulse 2s infinite' : 'none'
+                      }} />
+                    </Box>
+                    
+                    <Typography variant="h6" sx={{ opacity: 0.9, mb: 1 }}>
+                      {isListening ? 'Listening...' : 'Ready to Transcribe'}
+                    </Typography>
+                    
+                    {/* Add visible Stop button when recording */}
+                    {isListening && (
+                      <Button
+                        variant="contained"
+                        color="error"
+                        size="medium"
+                        onClick={() => {
+                          console.log('[UI] Stop button clicked');
+                          stopListening();
+                          if (currentTranscriptionId) {
+                            handleEndSession();
+                          }
+                        }}
+                        sx={{ 
+                          mb: 2,
+                          minWidth: 120,
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        Stop Recording
+                      </Button>
+                    )}
+                    
+                    {!isSupported && (
+                      <Alert severity="warning" sx={{ mx: 2 }}>
+                        Speech recognition not supported. Please use Chrome or Edge.
+                      </Alert>
+                    )}
+                    
+                    {/* Audio Upload Section */}
+                    <Box sx={{ px: 2, pb: 2 }}>
+                      <Divider sx={{ my: 2, borderColor: 'rgba(255,255,255,0.2)' }} />
+                      <Typography variant="subtitle2" sx={{ mb: 1, opacity: 0.9 }}>
+                        Or upload an audio file:
+                      </Typography>
+                      <AudioUploader
+                        encounterId={encounter?.id || ''}
+                        patientId={patient?.id || ''}
+                        formatPreference="soap"
+                        onUploadComplete={(transcriptionId) => {
+                          console.log('Audio upload complete:', transcriptionId);
+                          setCurrentTranscriptionId(transcriptionId);
+                          subscribeToTranscription(transcriptionId);
+                        }}
+                      />
+                    </Box>
+                  </Box>
+                )}
                 
                 {/* Live transcript display */}
                 <Box sx={{ 

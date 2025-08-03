@@ -2,7 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Container, ThemeProvider } from '@mui/material';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useAuth } from '@clerk/clerk-react';
+import { useAuth } from './hooks/useAuthWrapper';
 import EpicLaunch from './components/Auth/EpicLaunch';
 import EpicCallback from './components/Auth/EpicCallback';
 import LoginPage from './components/Auth/LoginPage';
